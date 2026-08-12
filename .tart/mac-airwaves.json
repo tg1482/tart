@@ -1,0 +1,8 @@
+{
+  "title": "Wi-Fi & Bluetooth",
+  "run": "uv run --with rich --with-editable /Users/tanmaygupta/dev/tart python examples/airwaves_show.py",
+  "data": "examples/data/airwaves.json",
+  "fetch": "uv run --with rich --with-editable /Users/tanmaygupta/dev/tart python examples/airwaves_fetch.py",
+  "stale_after": "3m",
+  "auto_refresh": true
+}

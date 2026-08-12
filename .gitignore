@@ -1,0 +1,14 @@
+__pycache__/
+*.pyc
+.venv/
+*.egg-info/
+.pytest_cache/
+uv.lock
+
+# Live artifact data — machine-specific, and it contains real local state
+# (SSID, IPs, device names, task titles). Never commit it.
+examples/data/
+
+# Remotion video project: a marketing asset, not part of the package.
+# Lives on disk, rendered on demand, not carried in the repo.
+video/

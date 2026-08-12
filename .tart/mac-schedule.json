@@ -1,0 +1,8 @@
+{
+  "title": "Scheduled jobs",
+  "run": "uv run --with rich --with-editable /Users/tanmaygupta/dev/tart python examples/schedule_show.py",
+  "data": "examples/data/schedule.json",
+  "fetch": "uv run --with rich --with-editable /Users/tanmaygupta/dev/tart python examples/schedule_fetch.py",
+  "stale_after": "10m",
+  "auto_refresh": false
+}

@@ -1,0 +1,7 @@
+{
+  "title": "Claude tool usage",
+  "run": "uv run --with rich --with-editable /Users/tanmaygupta/dev/tart python examples/tools_show.py",
+  "data": "examples/data/tools.json",
+  "fetch": "uv run --with rich --with-editable /Users/tanmaygupta/dev/tart python examples/tools_fetch.py",
+  "stale_after": "10m"
+}

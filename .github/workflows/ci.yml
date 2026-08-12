@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        python: ["3.10", "3.13"]   # the ends of the supported range
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv run --python ${{ matrix.python }} --with ruff ruff check --select F tartifacts/ tests/
+      - run: uv run --python ${{ matrix.python }} --with-editable . --with pytest pytest tests/ -q
+
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv build
+      # Install the built wheel, not the source tree: catches a package data
+      # file (skill.md) or entry point that only works from a checkout.
+      - run: uv tool install --force dist/*.whl
+      - run: tart --skill | head -1
+      - run: tart list

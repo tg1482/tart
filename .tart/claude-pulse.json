@@ -1,0 +1,8 @@
+{
+  "title": "Claude pulse",
+  "run": "uv run --with rich --with-editable /Users/tanmaygupta/dev/tart python examples/pulse_show.py",
+  "data": "examples/data/pulse.json",
+  "fetch": "uv run --with rich --with-editable /Users/tanmaygupta/dev/tart python examples/pulse_fetch.py",
+  "stale_after": "10m",
+  "auto_refresh": false
+}

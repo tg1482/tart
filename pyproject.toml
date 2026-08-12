@@ -1,0 +1,58 @@
+[project]
+name = "tartifacts"
+version = "0.2.0"
+description = "Live terminal artifacts — dashboards that stay open, stay fresh, and stay findable"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Tanmay Gupta", email = "tg1482@stern.nyu.edu" }]
+keywords = ["terminal", "dashboard", "tui", "rich", "cli", "agents"]
+dependencies = ["rich>=13.0"]
+
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Environment :: Console",
+  "Intended Audience :: Developers",
+  "Operating System :: MacOS",
+  "Operating System :: POSIX :: Linux",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Software Development :: User Interfaces",
+  "Topic :: System :: Monitoring",
+  "Topic :: Terminals",
+]
+
+[project.urls]
+Homepage = "https://github.com/tg1482/tart"
+Source = "https://github.com/tg1482/tart"
+Issues = "https://github.com/tg1482/tart/issues"
+Changelog = "https://github.com/tg1482/tart/blob/master/CHANGELOG.md"
+
+# The command stays `tart` — only the distribution and import name change,
+# because PyPI's `tart` is an active radio-telescope library that owns the
+# top-level `tart` module too.
+[project.scripts]
+tart = "tartifacts.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["tartifacts"]
+
+[tool.hatch.build.targets.sdist]
+include = ["tartifacts", "tests", "README.md", "CHANGELOG.md", "LICENSE", "Makefile"]
+
+[tool.ruff]
+line-length = 110
+
+[tool.ruff.lint]
+select = ["F"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["F811", "F841"]

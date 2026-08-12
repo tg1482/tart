@@ -1,0 +1,8 @@
+{
+  "title": "Machine vitals",
+  "run": "uv run --with rich --with-editable /Users/tanmaygupta/dev/tart python examples/vitals_show.py",
+  "data": "examples/data/vitals.json",
+  "fetch": "uv run --with rich --with-editable /Users/tanmaygupta/dev/tart python examples/vitals_fetch.py",
+  "stale_after": "1m",
+  "auto_refresh": true
+}

@@ -1,0 +1,8 @@
+{
+  "title": "Claude swarm",
+  "run": "uv run --with rich --with-editable /Users/tanmaygupta/dev/tart python examples/swarm_show.py",
+  "data": "examples/data/swarm.json",
+  "fetch": "uv run --with rich --with-editable /Users/tanmaygupta/dev/tart python examples/swarm_fetch.py",
+  "stale_after": "30s",
+  "auto_refresh": true
+}
