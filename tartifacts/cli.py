@@ -5,6 +5,7 @@
     tart render <name> [--json]  one frame, headless — for agents/logs
     tart fetch <name>            re-run an artifact's data-producing command
     tart logs <name>             the last fetch's outcome and output, however it was triggered
+    tart cron <name>             a crontab line that keeps its data fresh, PATH included
     tart register <path>         adopt a manifest living outside a scanned root
     tart trust <name>            agree to run this manifest's commands
     tart roots [add|rm <path>]   workspaces scanned for artifacts
@@ -16,6 +17,7 @@ from __future__ import annotations
 
 import os
 import shlex
+import shutil
 import subprocess
 import sys
 import threading
@@ -24,14 +26,14 @@ from collections import deque
 from pathlib import Path
 
 from . import (
-    discover, fmt, index, manifest as manifest_mod, refresh,
+    discover, envfile, fmt, index, manifest as manifest_mod, refresh,
     roots as roots_mod, status, trust,
 )
 from .manifest import Manifest
 
 USAGE = (
     "usage: tart list | run <name> | render <name> [--json] | "
-    "fetch <name> | logs <name> | register <path> | trust <name> | "
+    "fetch <name> | logs <name> | cron <name> | register <path> | trust <name> | "
     "roots [add|rm <path>] | reindex | --skill"
 )
 
@@ -63,6 +65,8 @@ def main() -> None:
         _fetch_cmd(args[1])
     elif cmd == "logs" and len(args) >= 2:
         _logs(args[1])
+    elif cmd == "cron" and len(args) >= 2:
+        _cron(args[1])
     elif cmd == "register" and len(args) >= 2:
         _register(args[1])
     elif cmd == "trust":
@@ -231,9 +235,24 @@ def _trust(args: list[str]) -> None:
     print(f"trusted {found.path}")
 
 
+def _env_overlay(ptr: Manifest) -> dict[str, str]:
+    """The declared env_file's values, or a loud exit when it can't be
+    loaded. Loud because the downstream failure — an API rejecting a blank
+    key — points anywhere but at the missing file."""
+    if ptr.env_file_path is None:
+        return {}
+    try:
+        return envfile.load(ptr.env_file_path)
+    except OSError as bad:
+        print(f"env_file {ptr.env_file_path} cannot be loaded: {bad}", file=sys.stderr)
+        sys.exit(1)
+
+
 def _exec(found: Manifest, command: str, extra: list[str]) -> None:
     _require_trust(found)
+    overlay = _env_overlay(found)
     os.chdir(found.root)  # so relative paths resolve regardless of caller cwd
+    os.environ.update(overlay)
     os.environ["TART_MANIFEST"] = str(found.path.resolve())
     full = " ".join([command, *(shlex.quote(a) for a in extra)])
     # exec, not subprocess: the artifact replaces this process, so herdr/tmux
@@ -262,15 +281,26 @@ def _fetch(ptr: Manifest, trigger: str = "cli") -> int:
     diagnosis printed once to a terminal (or to cron's mail) is gone."""
     _require_trust(ptr)
     # The fetch script asks the manifest where to write (data_path()), so it
-    # needs to know which manifest it's serving.
-    env = {**os.environ, "TART_MANIFEST": str(ptr.path.resolve())}
+    # needs to know which manifest it's serving. TART_MANIFEST goes on last:
+    # it is tart's own contract, not the env_file's to override.
+    env = dict(os.environ)
     before = _mtime(ptr.data_path)
     started = time.time()
 
     def record(**outcome) -> None:
         status.record_fetch(
-            ptr.path, trigger=trigger, duration=time.time() - started, **outcome
+            ptr.path, trigger=trigger, duration=time.time() - started,
+            path=env.get("PATH"), **outcome,
         )
+
+    if ptr.env_file_path is not None:
+        try:
+            env.update(envfile.load(ptr.env_file_path))
+        except OSError as bad:
+            record(error=f"env_file {ptr.env_file_path} cannot be loaded: {bad}")
+            print(f"env_file {ptr.env_file_path} cannot be loaded: {bad}", file=sys.stderr)
+            return 1
+    env["TART_MANIFEST"] = str(ptr.path.resolve())
 
     tail: deque[str] = deque(maxlen=200)
     try:
@@ -341,6 +371,47 @@ def _tee(pipe, tail: deque) -> None:
         tail.append(line)
 
 
+def _cron(name: str) -> None:
+    """Print a crontab line that will actually work, PATH included.
+
+    Cron's environment is almost empty — no /opt/homebrew/bin, no ~/.local
+    — so the line that works pasted into a shell fails under cron with
+    `command not found`, silently, all night. Baking the *current* PATH and
+    the absolute tart binary into the line removes the whole failure class;
+    the flight recorder catches whatever remains.
+    """
+    ptr = _resolve_or_exit(name)
+    if not ptr.fetch:
+        print(f'{ptr.path} has no "fetch" command — nothing for cron to run', file=sys.stderr)
+        sys.exit(1)
+    binary = shutil.which("tart") or f"{sys.executable} -m tartifacts.cli"
+    schedule = _cron_schedule(ptr.stale_after)
+    line = (
+        f"{schedule} PATH={shlex.quote(os.environ.get('PATH', '/usr/bin:/bin'))} "
+        f"{binary} fetch {shlex.quote(name)}"
+    )
+    if ptr.stale_after is None:
+        print("# no stale_after declared — hourly is a guess; adjust freely", file=sys.stderr)
+    print(line)
+    print(
+        f"\nadd it with: crontab -e"
+        f"\ncheck on it with: tart logs {name}   (every fetch records its outcome)",
+        file=sys.stderr,
+    )
+
+
+def _cron_schedule(stale_after: float | None) -> str:
+    """A cadence matching the declared staleness limit, so the data is
+    never much older than the manifest says to trust."""
+    if stale_after is None:
+        return "0 * * * *"
+    if stale_after < 3600:
+        return f"*/{max(5, int(stale_after // 60))} * * * *"
+    if stale_after < 86400:
+        return f"0 */{int(stale_after // 3600)} * * *"
+    return "0 9 * * *"
+
+
 def _logs(name: str) -> None:
     ptr = _resolve_or_exit(name)
     last = status.last_fetch(ptr.path)
@@ -352,6 +423,10 @@ def _logs(name: str) -> None:
         f"last fetch: {verdict}, {fmt.age(time.time() - last['at'])} ago "
         f"(trigger: {last['trigger']}, took {last['duration']}s)"
     )
+    if not last["ok"] and last.get("path"):
+        # PATH is the variable that actually differs between a shell, the
+        # keeper and cron — `uv: command not found` is a PATH diagnosis.
+        print(f"ran with PATH={last['path']}")
     log = status.log_tail(ptr.path)
     if log:
         print(f"\n{status.log_path(ptr.path)}:")

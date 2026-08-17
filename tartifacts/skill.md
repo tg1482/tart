@@ -25,6 +25,7 @@ place a path is declared, so neither script repeats it.
 | `tart render <name> --state '<json>'` | merge JSON into state first — how you review a keypress path headlessly |
 | `tart fetch <name>` | re-run its data-producing command now |
 | `tart logs <name>` | the last fetch's outcome and output — including background and cron fetches |
+| `tart cron <name>` | print a crontab line that keeps its data fresh — current PATH and absolute binary baked in |
 | `tart register <path>` | adopt a manifest living anywhere — records its location and trusts it |
 | `tart trust <name>` | agree to run this manifest's commands (`--all`, `--list`, `--forget <name>`) |
 | `tart roots add <path>` | register a workspace to scan (`rm` to remove, bare `roots` to list) |
@@ -143,11 +144,25 @@ and `tart list` names any manifest that fails to load.
 | `run` | yes | command that launches the artifact |
 | `data` | no | JSON file the artifact reads, relative to the repo root |
 | `fetch` | no | command that produces `data` |
+| `env_file` | no | KEY=VALUE file loaded into `run`/`fetch`'s environment (`~` expands) — where secrets live |
 | `stale_after` | no | `30s` / `45m` / `4h` / `2d` — when `data` stops being trustworthy |
 | `auto_refresh` | no | re-run `fetch` while open, whenever data passes `stale_after` |
 
 Paths are relative to the **repo root** (one level above `.tart/`), and
 `run`/`fetch` execute from there, so they work from any cwd.
+
+**`env_file`** exists because the same fetch runs in three environments —
+your shell, the background keeper, and cron — and only your shell has your
+exports. It's systemd's `EnvironmentFile=`: KEY=VALUE lines (`#` comments
+and an `export ` prefix tolerated, matching quotes stripped, no
+interpolation), loaded by tart before spawning, overriding the inherited
+environment so all three run identically. Keep secrets there rather than
+in the manifest (which gets committed) or the command string (which shows
+in `ps`). A declared `env_file` that can't be loaded fails the command
+loudly and is recorded like any fetch failure. Trust hashes the manifest,
+so *pointing* at a different file re-asks; the file's contents are data
+and deliberately outside the hash — as with direnv and what `.envrc`
+sources.
 
 **Depend on `tartifacts` from PyPI**: `uv run --with rich --with tartifacts
 python bin/dash.py`. Use `--with-editable /path/to/tart` only when

@@ -499,3 +499,95 @@ def test_render_json_mentions_the_failed_fetch(workspace):
     assert result.returncode == 1
     assert "FAILED (exit 7" in result.stderr
     assert "tart logs demo" in result.stderr         # where the output went
+
+
+# --- env_file: the same environment however the fetch is triggered ----------
+
+
+def test_env_file_reaches_the_fetch_script(workspace):
+    tmp_path, home, repo = workspace
+    (tmp_path / "secrets.env").write_text("DEMO_TOKEN=tok-123\n")
+    (repo / "fetch.py").write_text(textwrap.dedent("""
+        import json, os, tartifacts
+        with open(tartifacts.data_path(), "w") as f:
+            json.dump({"token_seen": os.environ.get("DEMO_TOKEN")}, f)
+    """))
+    spec = json.loads((repo / ".tart" / "demo.json").read_text())
+    spec["env_file"] = str(tmp_path / "secrets.env")
+    (repo / ".tart" / "demo.json").write_text(json.dumps(spec))
+    tart("trust", "demo", home=home, cwd=tmp_path)
+
+    assert tart("fetch", "demo", home=home, cwd=tmp_path).returncode == 0
+    assert json.loads((repo / "data" / "out.json").read_text()) == {"token_seen": "tok-123"}
+
+
+def test_env_file_reaches_the_render_script_and_overrides_inherited(workspace):
+    """run/render go through the same overlay, and the file WINS over the
+    caller's shell — determinism is the point."""
+    tmp_path, home, repo = workspace
+    (tmp_path / "secrets.env").write_text("DEMO_TOKEN=from-file\n")
+    (repo / "show.py").write_text(textwrap.dedent("""
+        import os
+        print("TOKEN=" + os.environ.get("DEMO_TOKEN", "unset"))
+    """))
+    spec = json.loads((repo / ".tart" / "demo.json").read_text())
+    spec["env_file"] = str(tmp_path / "secrets.env")
+    del spec["fetch"], spec["data"]          # isolate the render path
+    (repo / ".tart" / "demo.json").write_text(json.dumps(spec))
+    tart("trust", "demo", home=home, cwd=tmp_path)
+
+    env = {**os.environ, "TART_HOME": str(home / ".tart"), "PYTHONPATH": REPO,
+           "DEMO_TOKEN": "from-shell"}
+    result = subprocess.run(
+        [sys.executable, "-m", "tartifacts.cli", "render", "demo"],
+        capture_output=True, text=True, cwd=str(tmp_path), env=env, timeout=60,
+    )
+    assert "TOKEN=from-file" in result.stdout
+
+
+def test_missing_env_file_fails_loudly_and_is_recorded(workspace):
+    tmp_path, home, repo = workspace
+    spec = json.loads((repo / ".tart" / "demo.json").read_text())
+    spec["env_file"] = str(tmp_path / "absent.env")
+    (repo / ".tart" / "demo.json").write_text(json.dumps(spec))
+    tart("trust", "demo", home=home, cwd=tmp_path)
+
+    result = tart("fetch", "demo", home=home, cwd=tmp_path)
+    assert result.returncode == 1
+    assert "env_file" in result.stderr and "absent.env" in result.stderr
+    # No data was produced by a half-configured run.
+    assert not (repo / "data" / "out.json").exists()
+    # And the refusal is in the record, where cron's would be found.
+    logs = tart("logs", "demo", home=home, cwd=tmp_path)
+    assert "env_file" in logs.stdout
+
+
+def test_logs_shows_the_path_a_failed_fetch_ran_under(workspace):
+    tmp_path, home, repo = workspace
+    break_fetch(repo, home, tmp_path)
+    tart("fetch", "demo", home=home, cwd=tmp_path)
+    logs = tart("logs", "demo", home=home, cwd=tmp_path)
+    assert "ran with PATH=" in logs.stdout
+
+
+# --- tart cron --------------------------------------------------------------
+
+
+def test_cron_bakes_in_path_and_a_stale_after_matched_cadence(workspace):
+    tmp_path, home, repo = workspace       # stale_after: 1h
+    result = tart("cron", "demo", home=home, cwd=tmp_path)
+    assert result.returncode == 0
+    line = result.stdout.strip()
+    assert line.startswith("0 */1 * * * PATH=")
+    assert line.endswith("fetch demo")
+    assert "crontab -e" in result.stderr
+
+
+def test_cron_without_a_fetch_refuses(workspace):
+    tmp_path, home, repo = workspace
+    spec = json.loads((repo / ".tart" / "demo.json").read_text())
+    del spec["fetch"]
+    (repo / ".tart" / "demo.json").write_text(json.dumps(spec))
+    result = tart("cron", "demo", home=home, cwd=tmp_path)
+    assert result.returncode == 1
+    assert 'no "fetch"' in result.stderr

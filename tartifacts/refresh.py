@@ -18,7 +18,7 @@ import subprocess
 import threading
 import time
 
-from . import status
+from . import envfile, status
 from .manifest import Manifest
 
 # How often to re-check staleness. A fraction of the limit so an artifact
@@ -97,27 +97,39 @@ class Keeper:
         "captured and discarded" is how a fetch fails for 15 hours with the
         diagnosis destroyed each time."""
         started = time.time()
+        env = dict(os.environ)
+
+        def record(**outcome) -> dict:
+            return status.record_fetch(
+                self.manifest.path, trigger="keeper", duration=time.time() - started,
+                path=env.get("PATH"), **outcome,
+            )
+
+        if self.manifest.env_file_path is not None:
+            try:
+                env.update(envfile.load(self.manifest.env_file_path))
+            except OSError as bad:
+                self.last_fetch = record(
+                    error=f"env_file {self.manifest.env_file_path} cannot be loaded: {bad}"
+                )
+                return
+        env["TART_MANIFEST"] = str(self.manifest.path.resolve())
         try:
             proc = subprocess.run(
-                self.manifest.fetch, shell=True, cwd=self.manifest.root,
-                env={**os.environ, "TART_MANIFEST": str(self.manifest.path.resolve())},
+                self.manifest.fetch, shell=True, cwd=self.manifest.root, env=env,
                 capture_output=True, text=True, timeout=FETCH_TIMEOUT, check=False,
             )
         except subprocess.TimeoutExpired as bad:
-            self.last_fetch = status.record_fetch(
-                self.manifest.path, trigger="keeper", duration=time.time() - started,
-                error=f"timed out after {FETCH_TIMEOUT:.0f}s", output=_text(bad.output),
+            self.last_fetch = record(
+                error=f"timed out after {FETCH_TIMEOUT:.0f}s", output=_text(bad.output)
             )
             return
         except OSError as bad:
-            self.last_fetch = status.record_fetch(
-                self.manifest.path, trigger="keeper", duration=time.time() - started,
-                error=str(bad),
-            )
+            self.last_fetch = record(error=str(bad))
             return
-        self.last_fetch = status.record_fetch(
-            self.manifest.path, trigger="keeper", duration=time.time() - started,
-            exit_code=proc.returncode, output=(proc.stdout or "") + (proc.stderr or ""),
+        self.last_fetch = record(
+            exit_code=proc.returncode,
+            output=(proc.stdout or "") + (proc.stderr or ""),
         )
 
 

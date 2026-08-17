@@ -57,6 +57,11 @@ class Manifest:
     data: str | None = None
     fetch: str | None = None
     stale_after: float | None = None
+    # KEY=VALUE file loaded into `run`/`fetch`'s environment (see envfile).
+    # Declared here because the manifest is what trust hashes: pointing it
+    # at a different file re-asks, while the file's CONTENTS are data and
+    # deliberately outside the hash — like direnv and what .envrc sources.
+    env_file: str | None = None
     # Opt-in, because `fetch` can be expensive (a real API call). Off, a
     # artifact only shows staleness and tells you to refresh; on, it keeps
     # its own data fresh and needs no external cron at all.
@@ -78,6 +83,15 @@ class Manifest:
         if not self.data:
             return None
         candidate = Path(self.data)
+        return candidate if candidate.is_absolute() else self.root / candidate
+
+    @property
+    def env_file_path(self) -> Path | None:
+        """Like `data_path`, but `~` expands — secrets typically live in
+        the home directory precisely so they stay out of the repo."""
+        if not self.env_file:
+            return None
+        candidate = Path(self.env_file).expanduser()
         return candidate if candidate.is_absolute() else self.root / candidate
 
     def data_age(self) -> float | None:
@@ -154,6 +168,7 @@ FIELD_TYPES = {
     "run": str,
     "data": str,
     "fetch": str,
+    "env_file": str,
     "auto_refresh": bool,
     "stale_after": (str, int, float),
 }
@@ -201,6 +216,7 @@ def load(path: Path) -> Manifest | None:
         run=raw.get("run"),
         data=raw.get("data"),
         fetch=raw.get("fetch"),
+        env_file=raw.get("env_file"),
         stale_after=parse_duration(raw.get("stale_after")),
         auto_refresh=bool(raw.get("auto_refresh", False)),
     )

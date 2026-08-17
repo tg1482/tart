@@ -166,3 +166,33 @@ def test_auto_refresh_off_never_fetches_however_stale(tmp_path):
     }))
     keeper = refresh.Keeper(manifest.load(spec))
     assert keeper.should_fetch() is False
+
+
+def test_keeper_loads_the_declared_env_file(tmp_path):
+    secrets = tmp_path / "secrets.env"
+    secrets.write_text("KEEPER_PROBE=from-env-file\n")
+    ptr = make(tmp_path, data="out.json", auto_refresh=True, env_file=str(secrets),
+               fetch="python3 -c \"import os; open('out.json','w').write("
+                     "'{\\\"probe\\\": \\\"' + os.environ['KEEPER_PROBE'] + '\\\"}')\"")
+    keeper = refresh.Keeper(ptr)
+    keeper._run()
+    assert keeper.last_fetch["ok"] is True, keeper.last_fetch
+    assert json.loads((tmp_path / "repo" / "out.json").read_text()) == {"probe": "from-env-file"}
+
+
+def test_keeper_records_a_missing_env_file_instead_of_running(tmp_path):
+    marker = tmp_path / "ran.txt"
+    ptr = make(tmp_path, data="out.json", auto_refresh=True,
+               env_file=str(tmp_path / "absent.env"), fetch=f"touch {marker}")
+    keeper = refresh.Keeper(ptr)
+    keeper._run()
+    assert not marker.exists()               # refused to run half-configured
+    assert keeper.last_fetch["ok"] is False
+    assert "env_file" in keeper.last_fetch["error"]
+
+
+def test_keeper_records_the_path_it_ran_under(tmp_path):
+    ptr = make(tmp_path, data="out.json", auto_refresh=True, fetch="exit 9")
+    keeper = refresh.Keeper(ptr)
+    keeper._run()
+    assert keeper.last_fetch["path"] == os.environ.get("PATH")

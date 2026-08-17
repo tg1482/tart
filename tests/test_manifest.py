@@ -101,3 +101,20 @@ def test_staleness_is_judged_at_the_exact_boundary(tmp_path, monkeypatch, age, s
     written = os.path.getmtime(data)
     monkeypatch.setattr(manifest.time, "time", lambda: written + age)
     assert ptr.is_stale() is stale
+
+
+def test_env_file_path_resolves_like_data_but_expands_home(tmp_path, monkeypatch):
+    relative = manifest.load(write_pointer(tmp_path / "a", env_file="secrets.env"))
+    assert relative.env_file_path == tmp_path / "a" / "repo" / "secrets.env"
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    home_based = manifest.load(write_pointer(tmp_path / "b", env_file="~/.secrets/x.env"))
+    assert home_based.env_file_path == tmp_path / ".secrets" / "x.env"
+
+    assert manifest.load(write_pointer(tmp_path / "c")).env_file_path is None
+
+
+def test_env_file_must_be_a_string(tmp_path):
+    path = write_pointer(tmp_path, env_file=["a.env"])
+    assert manifest.load(path) is None
+    assert '"env_file" must be str' in manifest.problem(path)

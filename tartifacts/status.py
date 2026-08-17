@@ -52,9 +52,14 @@ def record_fetch(
     exit_code: int | None = None,  # None when it never got to exit (see error)
     error: str | None = None,      # timeout / spawn failure / postcondition, in words
     output: str = "",              # combined stdout+stderr, tail kept
+    path: str | None = None,       # the PATH the fetch ran under
 ) -> dict:
     """Write the outcome down and return it (so a live keeper can also hold
-    it in memory without re-reading the file it just wrote)."""
+    it in memory without re-reading the file it just wrote).
+
+    PATH is recorded because it's the variable that actually differs
+    between a shell, the keeper, and cron — `uv: command not found` from a
+    cron line is a PATH diagnosis, and the record should carry it."""
     entry = {
         "at": time.time(),
         "trigger": trigger,
@@ -63,6 +68,7 @@ def record_fetch(
         "ok": exit_code == 0 and error is None,
         "error": error,
         "output_tail": output[-TAIL_CHARS:],
+        "path": path,
     }
     directory = artifact_dir(manifest_path)
     try:

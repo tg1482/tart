@@ -26,6 +26,20 @@ dashboard sat frozen with the diagnosis destroyed each round.
 - `fmt.age(seconds)` — `"45s"` / `"3h"` / `"1d"`, the relative-time helper
   every artifact was hand-rolling
 
+**Deterministic environments.** The same fetch runs in three environments
+— your shell, the background keeper, cron — and only your shell has your
+exports.
+
+- `env_file` manifest key (systemd's `EnvironmentFile=`): KEY=VALUE lines
+  loaded into `run`/`fetch`'s environment before spawning, overriding the
+  inherited environment so all three triggers run identically. Secrets
+  stay out of the manifest (committed) and the command string (`ps`). A
+  declared file that can't load fails loudly and is recorded
+- Every fetch records the PATH it ran under; `tart logs` shows it on
+  failure — `uv: command not found` from cron is a PATH diagnosis
+- `tart cron <name>` prints a crontab line with the current PATH and the
+  absolute tart binary baked in, at a cadence matching `stale_after`
+
 ## 0.1.0 — unreleased
 
 First public release of **live terminal artifacts** — dashboards that
