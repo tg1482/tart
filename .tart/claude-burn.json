@@ -1,8 +1,8 @@
 {
   "title": "Claude token burn",
-  "run": "uv run --with rich --with-editable /Users/tanmaygupta/dev/tart python examples/burn_show.py",
+  "run": "$TART_PYTHON examples/burn_show.py",
   "data": "examples/data/burn.json",
-  "fetch": "uv run --with rich --with-editable /Users/tanmaygupta/dev/tart python examples/burn_fetch.py",
+  "fetch": "$TART_PYTHON examples/burn_fetch.py",
   "stale_after": "10m",
   "auto_refresh": false
 }
