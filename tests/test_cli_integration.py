@@ -230,6 +230,7 @@ def test_the_refusal_shows_what_would_have_run(tmp_path):
 
 def test_editing_a_trusted_manifest_asks_again(workspace):
     tmp_path, home, repo = workspace
+    tart("fetch", "demo", home=home, cwd=tmp_path)  # else render flags no-data
     assert tart("render", "demo", home=home, cwd=tmp_path).returncode == 0
 
     spec = json.loads((repo / ".tart" / "demo.json").read_text())
@@ -412,3 +413,89 @@ def test_register_refuses_a_manifest_it_cannot_use(workspace):
     bad.write_text('{"title": "T", "run": ["not", "a", "string"]}')
     out = tart("register", str(bad), home=home, cwd=tmp_path)
     assert out.returncode == 1 and '"run" must be str' in out.stderr
+
+
+# --- the flight recorder ----------------------------------------------------
+# Every fetch — CLI, `tart run`'s pre-launch refresh, keeper, cron — records
+# its outcome. These test the surfaces a user or agent actually reads:
+# `tart logs`, `tart list`, and `render --json`'s exit code.
+
+
+def break_fetch(repo, home, tmp_path, script="import sys; print('cannot reach api', file=sys.stderr); sys.exit(7)"):
+    manifest = repo / ".tart" / "demo.json"
+    spec = json.loads(manifest.read_text())
+    spec["fetch"] = f"{sys.executable} -c \"{script}\""
+    manifest.write_text(json.dumps(spec))
+    tart("trust", "demo", home=home, cwd=tmp_path)   # editing it revoked trust
+
+
+def test_failed_fetch_is_recorded_and_logs_shows_its_stderr(workspace):
+    """The whole point: the diagnosis survives the terminal it once
+    scrolled past. `tart logs` must show WHAT failed, WHY, and the output."""
+    tmp_path, home, repo = workspace
+    break_fetch(repo, home, tmp_path)
+    result = tart("fetch", "demo", home=home, cwd=tmp_path)
+    assert result.returncode == 7
+    assert "cannot reach api" in result.stderr       # still shown live
+
+    logs = tart("logs", "demo", home=home, cwd=tmp_path)
+    assert logs.returncode == 0
+    assert "FAILED (exit 7)" in logs.stdout
+    assert "cannot reach api" in logs.stdout         # and preserved
+
+
+def test_list_distinguishes_failed_fetch_from_merely_stale(workspace):
+    """"⚠ data stale" says the data is old; "✗ fetch failed" says why it
+    will stay old. A cron fetch failing all night used to render
+    identically to five-minutes-past-its-limit."""
+    tmp_path, home, repo = workspace
+    break_fetch(repo, home, tmp_path)
+    tart("fetch", "demo", home=home, cwd=tmp_path)
+    listing = tart("list", home=home, cwd=tmp_path)
+    assert "✗ fetch failed (exit 7," in listing.stdout
+
+
+def test_success_clears_the_failure_from_list(workspace):
+    tmp_path, home, repo = workspace
+    break_fetch(repo, home, tmp_path)
+    tart("fetch", "demo", home=home, cwd=tmp_path)
+
+    # Repair the fetch; the next success must clear the ✗, not linger.
+    spec = json.loads((repo / ".tart" / "demo.json").read_text())
+    spec["fetch"] = f"{sys.executable} fetch.py"
+    (repo / ".tart" / "demo.json").write_text(json.dumps(spec))
+    tart("trust", "demo", home=home, cwd=tmp_path)
+    assert tart("fetch", "demo", home=home, cwd=tmp_path).returncode == 0
+
+    assert "✗" not in tart("list", home=home, cwd=tmp_path).stdout
+    logs = tart("logs", "demo", home=home, cwd=tmp_path)
+    assert "last fetch: ok" in logs.stdout
+    assert "FAILED (exit 7)" in logs.stdout          # history stays in the log
+
+
+def test_logs_without_history_says_so(workspace):
+    tmp_path, home, repo = workspace
+    logs = tart("logs", "demo", home=home, cwd=tmp_path)
+    assert logs.returncode == 0
+    assert "no fetch recorded" in logs.stdout
+
+
+def test_render_json_on_never_fetched_artifact_exits_nonzero_with_why(workspace):
+    """`{"data": null}` with exit 0 told an agent nothing. The payload
+    still prints (partial numbers flow), stderr names the missing file,
+    and the exit code says unhealthy."""
+    tmp_path, home, repo = workspace
+    result = tart("render", "demo", "--json", home=home, cwd=tmp_path)
+    assert result.returncode == 1
+    assert "does not exist" in result.stderr
+    assert "tart fetch demo" in result.stderr        # the fix, prescribed
+
+
+def test_render_json_mentions_the_failed_fetch(workspace):
+    tmp_path, home, repo = workspace
+    break_fetch(repo, home, tmp_path)
+    tart("fetch", "demo", home=home, cwd=tmp_path)
+    result = tart("render", "demo", "--json", home=home, cwd=tmp_path)
+    assert result.returncode == 1
+    assert "FAILED (exit 7" in result.stderr
+    assert "tart logs demo" in result.stderr         # where the output went

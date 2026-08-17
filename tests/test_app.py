@@ -56,3 +56,42 @@ def test_without_rows_every_key_reaches_on_key():
 # --- mode-aware dispatch ---------------------------------------------------
 
 
+
+
+# --- the warning bar and source diagnosis -----------------------------------
+
+
+def test_file_source_problem_distinguishes_the_three_nones(tmp_path):
+    """read_now() collapses missing, corrupt and unreadable into one None;
+    problem() is what tells an agent which it was."""
+    missing = app.FileSource(tmp_path / "absent.json")
+    assert "does not exist" in missing.problem()
+
+    corrupt = tmp_path / "torn.json"
+    corrupt.write_text('{"half": ')
+    assert "not valid JSON" in app.FileSource(corrupt).problem()
+
+    fine = tmp_path / "ok.json"
+    fine.write_text("{}")
+    assert app.FileSource(fine).problem() is None
+
+
+def test_warning_prefers_broken_data_over_failed_fetch(tmp_path):
+    """On-screen-not-matching-disk beats won't-get-fresher."""
+    class FakeKeeper:
+        last_fetch = {"ok": False, "exit_code": 7, "at": 0}
+
+    said = app._warning("Expecting value: line 1", FakeKeeper(), "spend")
+    assert "data file unreadable" in said
+
+    said = app._warning(None, FakeKeeper(), "spend")
+    assert "fetch failed (exit 7" in said
+    assert "tart logs spend" in said       # where to look next, named
+
+
+def test_no_warning_when_healthy():
+    class FakeKeeper:
+        last_fetch = {"ok": True, "exit_code": 0, "at": 0}
+
+    assert app._warning(None, FakeKeeper(), "spend") is None
+    assert app._warning(None, None, None) is None   # manifest-less artifact

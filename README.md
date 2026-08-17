@@ -61,6 +61,7 @@ tart list                    # what's declared, what's live
 tart run <name>              # launch, fetching first if stale
 tart render <name> [--json]  # one frame headless, or the numbers as JSON
 tart fetch <name>            # re-run its data command
+tart logs <name>             # the last fetch's outcome and output, even from cron
 tart register <path>         # adopt a manifest from anywhere
 tart trust <name>            # approve a scanned manifest
 tart roots add <path>        # a workspace to scan

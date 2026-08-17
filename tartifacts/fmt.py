@@ -24,6 +24,20 @@ def grouped(n: float) -> str:
     return f"{sign}{abs(n):,.2f}"
 
 
+AGE_UNITS = (("d", 86400), ("h", 3600), ("m", 60))
+
+
+def age(seconds: float) -> str:
+    """93784 -> '1d'. One unit, largest that fits — an age is read at a
+    glance ("failing since yesterday"), not compared digit by digit. Every
+    artifact was hand-rolling its own `ago()`; this is that, once."""
+    seconds = max(0.0, seconds)
+    for unit, size_s in AGE_UNITS:
+        if seconds >= size_s:
+            return f"{int(seconds // size_s)}{unit}"
+    return f"{int(seconds)}s"
+
+
 BYTE_UNITS = ("B", "KB", "MB", "GB", "TB", "PB")
 
 

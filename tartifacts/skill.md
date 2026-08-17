@@ -24,6 +24,7 @@ place a path is declared, so neither script repeats it.
 | `tart render <name> --json` | print its `summary()` as JSON |
 | `tart render <name> --state '<json>'` | merge JSON into state first — how you review a keypress path headlessly |
 | `tart fetch <name>` | re-run its data-producing command now |
+| `tart logs <name>` | the last fetch's outcome and output — including background and cron fetches |
 | `tart register <path>` | adopt a manifest living anywhere — records its location and trusts it |
 | `tart trust <name>` | agree to run this manifest's commands (`--all`, `--list`, `--forget <name>`) |
 | `tart roots add <path>` | register a workspace to scan (`rm` to remove, bare `roots` to list) |
@@ -44,16 +45,27 @@ replacing it. Keep what you want to review headlessly in plain state.
 over-tall frame looks headless the way it will look on screen.
 
 **Checking an artifact works** needs no separate command: `tart render
-<name> --json` renders it (a crashing `render` is a non-zero exit) and
-prints the summary, `tart fetch <name>` reports precisely if the fetch
-fails or writes the wrong path, and `tart list` flags stale data and names
-any manifest that won't load.
+<name> --json` renders it (a crashing `render` or an unreadable data file
+is a non-zero exit, with the why on stderr) and prints the summary, `tart
+fetch <name>` reports precisely if the fetch fails or writes the wrong
+path, `tart list` flags stale data, failed fetches, and manifests that
+won't load, and `tart logs <name>` shows what the last fetch actually said.
+
+**Every fetch is recorded** — CLI, `tart run`'s pre-launch refresh, the
+background keeper, a cron line — under `<TART_HOME>/artifacts/`: the last
+outcome (exit code, duration, output tail) plus an appended `fetch.log`.
+That record is what `tart list`'s `✗ fetch failed (...)`, the artifact's
+own warning bar, and `tart logs` read. A fetch that fails overnight in
+cron is therefore visible the next morning in all three, with its stderr
+intact.
 
 **Exit codes**, so cron and CI can gate on tart rather than grep its output:
-`render --json` is non-zero if the artifact fails to render; `fetch` passes
-through the fetch command's status (124 timeout, 128+N if signal-killed, 1
-if it wrote nowhere); `list` is 1 if any manifest is unreadable; an unknown
-or ambiguous name is 1.
+`render` (both modes) is non-zero if the artifact fails to render OR a
+declared data file is missing/unparseable — the frame or summary still
+prints, stderr says which file and why, so partial numbers flow but the
+exit says unhealthy; `fetch` passes through the fetch command's status
+(124 timeout, 128+N if signal-killed, 1 if it wrote nowhere); `list` is 1
+if any manifest is unreadable; an unknown or ambiguous name is 1.
 
 ## Where a manifest can live
 
@@ -137,8 +149,9 @@ and `tart list` names any manifest that fails to load.
 Paths are relative to the **repo root** (one level above `.tart/`), and
 `run`/`fetch` execute from there, so they work from any cwd.
 
-**`tartifacts` is not on PyPI yet.** Until it is, depend on a checkout:
-`uv run --with rich --with-editable /path/to/tart python bin/dash.py`.
+**Depend on `tartifacts` from PyPI**: `uv run --with rich --with tartifacts
+python bin/dash.py`. Use `--with-editable /path/to/tart` only when
+developing tart itself (see Gotchas).
 
 Declaring `data`/`fetch`/`stale_after` is what makes an artifact
 self-contained rather than silently depending on someone's crontab.
@@ -408,9 +421,11 @@ printed.
 6. `tart roots add <workspace>` once, if it isn't registered.
 
 **Debug one that's not showing data**
-`tart render <name> --json` runs it and surfaces a crash; `tart fetch
-<name>` reruns the producer and reports a wrong write path; `tart list`
-flags stale data and unreadable manifests.
+`tart render <name> --json` runs it and surfaces a crash or an unreadable
+data file (non-zero exit, why on stderr); `tart logs <name>` shows the last
+fetch's output — the place a background or cron failure's stderr survives;
+`tart fetch <name>` reruns the producer and reports a wrong write path;
+`tart list` flags stale data, failed fetches, and unreadable manifests.
 
 **Read an artifact's data without a terminal**
 `tart render <name> --json`. Falls back to raw source data if the artifact
@@ -418,8 +433,10 @@ declares no `summary()`.
 
 ## Gotchas
 
-- **Depend on tart with `--with-editable`, not `--with`.** `uv run
-  --with <path>` builds and caches a wheel, so edits silently don't apply.
+- **Developing tart itself? `--with-editable <checkout>`, not
+  `--with <path>`.** `uv run --with <path>` builds and caches a wheel, so
+  edits silently don't apply. Artifacts that just *use* tart should depend
+  on the released package: `--with tartifacts`.
 - **A running artifact does NOT pick up tart changes — restart it.**
   Python imports at startup, so `--with-editable` only helps the *next*
   process. After upgrading tart, `q` and `tart run <name>` again,

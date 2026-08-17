@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.3 — unreleased
+
+**The flight recorder.** Failure used to be silent: the background keeper
+captured a fetch's output and discarded it, a broken data file was dropped
+on the floor, and `render --json` printed `{"data": null}` with exit 0 — a
+cron fetch once failed for 15 hours (`uv: command not found`) while the
+dashboard sat frozen with the diagnosis destroyed each round.
+
+- Every fetch — CLI, `tart run`'s pre-launch refresh, background keeper —
+  records its outcome (exit code, duration, output tail) under
+  `<TART_HOME>/artifacts/<name>-<hash>/`, plus an appended, capped
+  `fetch.log`
+- `tart logs <name>` — the last fetch's outcome and preserved output
+- `tart list` shows `✗ fetch failed (exit 127, 15h ago)` distinctly from
+  `⚠ data stale`
+- A live artifact shows a one-line warning bar when its data file stops
+  parsing or its last background fetch failed (seeded from disk, so a cron
+  failure from before launch is visible on the first frame)
+- `tart render` / `--json` exit non-zero when a declared data file is
+  missing or unparseable, with the why on stderr (which file, the last
+  fetch's outcome, and what to run next) — the frame/summary still prints
+- `--state`-pinned keys are no longer clobbered by the file watcher in
+  interactive mode
+- `fmt.age(seconds)` — `"45s"` / `"3h"` / `"1d"`, the relative-time helper
+  every artifact was hand-rolling
+
 ## 0.1.0 — unreleased
 
 First public release of **live terminal artifacts** — dashboards that

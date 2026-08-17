@@ -29,20 +29,24 @@ import json
 import os
 import sys
 import threading
+import time
 from pathlib import Path
 from queue import Empty, Queue
 from typing import Any, Callable
 
-from rich.console import Console
+from rich.console import Console, Group
 from rich.segment import Segment, Segments
+from rich.text import Text
 
 from . import input as ck_input
 from . import (
+    fmt,
     index,
     registry,
     manifest as manifest_mod,
     refresh as ck_refresh,
     source as ck_source,
+    status as ck_status,
     terminal as ck_terminal,
     widgets,
 )
@@ -68,6 +72,23 @@ class FileSource:
                 return json.load(f)
         except (OSError, json.JSONDecodeError):
             return None
+
+    def problem(self) -> str | None:
+        """Why `read_now()` returns None, in words — or None when the file
+        is fine. `read_now` collapses missing, corrupt and unreadable into
+        one None, which renders as "no data" and gives an agent staring at
+        `--json` output nothing to distinguish "never fetched" from "a torn
+        write" from "a permissions accident"."""
+        try:
+            with open(self.path) as f:
+                json.load(f)
+            return None
+        except FileNotFoundError:
+            return f"{self.path} does not exist — never fetched?"
+        except OSError as bad:
+            return f"{self.path} cannot be read: {bad}"
+        except json.JSONDecodeError as bad:
+            return f"{self.path} is not valid JSON: {bad}"
 
     def start(self, q: Queue) -> threading.Event:
         return ck_source.watch_file(self.path, q, self.poll_interval)
@@ -238,6 +259,35 @@ def _load_all(sources: dict, state: dict, pinned: set[str] = frozenset()) -> Non
             state[name] = src.read_now()
 
 
+def _diagnose_sources(sources: dict, state: dict, pinned: set) -> bool:
+    """Report every source that failed to load, on stderr, with the fetch
+    record when there is one. Returns True if anything was wrong — headless
+    modes exit non-zero on it, because "no data" printing with exit 0 is
+    indistinguishable (to cron, CI, an agent) from a genuinely empty
+    artifact."""
+    broken = False
+    for name, src in sources.items():
+        if name in pinned or state.get(name) is not None:
+            continue
+        why = getattr(src, "problem", lambda: None)()
+        if why:
+            broken = True
+            print(f"source '{name}': {why}", file=sys.stderr)
+    declared = state.get("manifest")
+    if broken and declared is not None:
+        last = ck_status.last_fetch(declared.path)
+        if last is not None and not last.get("ok"):
+            print(
+                f"last fetch: FAILED ({ck_status.describe(last)}, "
+                f"{fmt.age(time.time() - last.get('at', 0))} ago) — "
+                f"tart logs {declared.path.stem}",
+                file=sys.stderr,
+            )
+        elif declared.fetch:
+            print(f"try: tart fetch {declared.path.stem}", file=sys.stderr)
+    return broken
+
+
 def _headless_json(sources: dict, state: dict, render, summary, pinned=frozenset()) -> None:
     _load_all(sources, state, pinned)
 
@@ -263,6 +313,10 @@ def _headless_json(sources: dict, state: dict, render, summary, pinned=frozenset
         # that silently becomes null in jq; better to fail loudly.
         print(f"summary is not representable as JSON: {bad}", file=sys.stderr)
         sys.exit(1)
+    # After the payload: partial numbers still flow to whoever pipes them,
+    # but the exit code says the artifact is not actually healthy.
+    if _diagnose_sources(sources, state, pinned):
+        sys.exit(1)
 
 
 def _headless_once(sources: dict, state: dict, render, args: list[str], pinned=frozenset()) -> None:
@@ -287,6 +341,8 @@ def _headless_once(sources: dict, state: dict, render, args: list[str], pinned=f
         # frame as it really renders, colours and all, for a README.
         Path(svg).parent.mkdir(parents=True, exist_ok=True)
         Path(svg).write_text(console.export_svg(title=state.get("_svg_title", "tart")))
+    if _diagnose_sources(sources, state, pinned):
+        sys.exit(1)
 
 
 def _interactive(title, manifest, sources, state, render, keys, pinned=frozenset()) -> None:
@@ -313,9 +369,24 @@ def _interactive(title, manifest, sources, state, render, keys, pinned=frozenset
 
     reader = ck_input.Reader()
     source_names = list(sources)
+    data_error: str | None = None
+    name = Path(manifest_path).stem if manifest_path else None
+
+    def frame():
+        # The warning bar rides ABOVE the artifact's own frame: rich's
+        # screen=True Live crops at the bottom, so that's the one edge a
+        # broken artifact can't push its own bad news off of. One row
+        # sacrificed, but only while something is actually wrong.
+        rendered = render(state, console)
+        warning = _warning(data_error, keeper, name)
+        if warning is None:
+            return rendered
+        return Group(Text(warning, style="bold black on yellow", no_wrap=True,
+                          overflow="ellipsis"), rendered)
+
     try:
         with ck_terminal.raw_mode(), Live(
-            render(state, console), console=console, screen=True, refresh_per_second=4
+            frame(), console=console, screen=True, refresh_per_second=4
         ) as live:
             while True:
                 event = reader.poll(POLL_TICK)
@@ -336,20 +407,43 @@ def _interactive(title, manifest, sources, state, render, keys, pinned=frozenset
                     while True:
                         evt = updates.get_nowait()
                         if evt.ok:
+                            data_error = None
                             # Single-source artifacts are the common case; with
                             # several, events don't carry which one fired, so
                             # re-read each. Cheap (local file/cached cmd output).
                             if len(source_names) == 1:
-                                state[source_names[0]] = evt.value
+                                if source_names[0] not in pinned:
+                                    state[source_names[0]] = evt.value
                             else:
-                                _load_all(sources, state)
+                                _load_all(sources, state, pinned)
+                        else:
+                            # The watcher went to the trouble of saying WHY the
+                            # file didn't parse; dropping that on the floor left
+                            # the artifact rendering old data with no indication.
+                            data_error = str(evt.value)
                 except Empty:
                     pass
 
                 # Redraw every tick, not only on new data: a keypress moves
                 # the cursor without changing any source.
-                live.update(render(state, console))
+                live.update(frame())
     finally:
         if manifest_path:
             registry.unregister()
+
+
+def _warning(data_error: str | None, keeper, name: str | None) -> str | None:
+    """The one line most worth interrupting the artifact for. A broken data
+    file beats a failed fetch: the first means what's on screen is not what's
+    on disk, the second only that it won't get fresher."""
+    if data_error:
+        return f"⚠ data file unreadable: {data_error}"
+    last = keeper.last_fetch if keeper else None
+    if last is not None and not last.get("ok"):
+        hint = f" — tart logs {name}" if name else ""
+        return (
+            f"⚠ fetch failed ({ck_status.describe(last)}, "
+            f"{fmt.age(time.time() - last.get('at', 0))} ago){hint}"
+        )
+    return None
 

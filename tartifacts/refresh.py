@@ -16,7 +16,9 @@ from __future__ import annotations
 import os
 import subprocess
 import threading
+import time
 
+from . import status
 from .manifest import Manifest
 
 # How often to re-check staleness. A fraction of the limit so an artifact
@@ -40,6 +42,10 @@ class Keeper:
         self._wake = threading.Event()
         self._force = False
         self._lock = threading.Lock()
+        # Seeded from disk so a fetch that failed BEFORE launch — cron
+        # overnight, `tart run`'s own pre-launch refresh — is visible from
+        # the first frame, not only after this keeper's first attempt.
+        self.last_fetch: dict | None = status.last_fetch(manifest.path)
 
     @property
     def can_fetch(self) -> bool:
@@ -85,11 +91,38 @@ class Keeper:
                 self._run()
 
     def _run(self) -> None:
+        """Never raises — the artifact keeps showing stale data with its
+        warning rather than dying. But never *silent* either: the outcome
+        (exit code, output tail) is recorded whatever happens, because
+        "captured and discarded" is how a fetch fails for 15 hours with the
+        diagnosis destroyed each time."""
+        started = time.time()
         try:
-            subprocess.run(
+            proc = subprocess.run(
                 self.manifest.fetch, shell=True, cwd=self.manifest.root,
                 env={**os.environ, "TART_MANIFEST": str(self.manifest.path.resolve())},
-                capture_output=True, timeout=FETCH_TIMEOUT, check=False,
+                capture_output=True, text=True, timeout=FETCH_TIMEOUT, check=False,
             )
-        except (OSError, subprocess.TimeoutExpired):
-            pass  # the artifact keeps showing stale data with its warning — better than dying
+        except subprocess.TimeoutExpired as bad:
+            self.last_fetch = status.record_fetch(
+                self.manifest.path, trigger="keeper", duration=time.time() - started,
+                error=f"timed out after {FETCH_TIMEOUT:.0f}s", output=_text(bad.output),
+            )
+            return
+        except OSError as bad:
+            self.last_fetch = status.record_fetch(
+                self.manifest.path, trigger="keeper", duration=time.time() - started,
+                error=str(bad),
+            )
+            return
+        self.last_fetch = status.record_fetch(
+            self.manifest.path, trigger="keeper", duration=time.time() - started,
+            exit_code=proc.returncode, output=(proc.stdout or "") + (proc.stderr or ""),
+        )
+
+
+def _text(output: str | bytes | None) -> str:
+    """TimeoutExpired carries whatever was captured so far — as bytes."""
+    if output is None:
+        return ""
+    return output.decode(errors="replace") if isinstance(output, bytes) else output

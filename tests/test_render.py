@@ -82,7 +82,12 @@ def test_render_sees_the_manifest_for_policy(artifact, capsys):
     assert seen["title"] == "From manifest"
 
 
-def test_missing_data_file_renders_rather_than_crashing(tmp_path, monkeypatch, capsys):
+def test_missing_data_file_renders_the_frame_but_exits_nonzero(tmp_path, monkeypatch, capsys):
+    """Two halves of one contract. The frame still renders — an artifact's
+    empty state is real UI, not a crash. But the exit code says unhealthy,
+    with the why on stderr: "no data" printing with exit 0 was
+    indistinguishable (to cron, CI, an agent) from a genuinely empty
+    artifact."""
     repo = tmp_path / "repo"
     (repo / ".tart").mkdir(parents=True)
     manifest = repo / ".tart" / "thing.json"
@@ -93,8 +98,12 @@ def test_missing_data_file_renders_rather_than_crashing(tmp_path, monkeypatch, c
     def render_empty(state, console):
         return Text("no data" if state.get("data") is None else "data")
 
-    app.run(render=render_empty, argv=["--once"])
-    assert "no data" in capsys.readouterr().out
+    with pytest.raises(SystemExit) as bad:
+        app.run(render=render_empty, argv=["--once"])
+    captured = capsys.readouterr()
+    assert "no data" in captured.out
+    assert "does not exist" in captured.err
+    assert bad.value.code == 1
 
 
 def test_artifact_without_a_manifest_still_renders(tmp_path, monkeypatch, capsys):

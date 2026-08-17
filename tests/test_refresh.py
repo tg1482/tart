@@ -2,7 +2,7 @@ import json
 import os
 import time
 
-from tartifacts import manifest, refresh
+from tartifacts import manifest, refresh, status
 
 
 def make(tmp_path, name="thing", **fields):
@@ -78,6 +78,49 @@ def test_failing_fetch_runs_but_does_not_raise(tmp_path):
     keeper._run()
     assert marker.exists()          # the command was actually invoked
     assert not (tmp_path / "out.json").exists()   # and it legitimately failed
+
+
+def test_failing_fetch_is_recorded_not_swallowed(tmp_path):
+    """The keeper's whole failure story used to be `capture_output=True`
+    then nothing — a cron-style fetch failed for 15 hours and the diagnosis
+    (its stderr) was destroyed each round. Now the outcome is on disk and
+    on the keeper, stderr tail intact."""
+    ptr = make(tmp_path, data="out.json", auto_refresh=True,
+               fetch="echo diagnosing >&2; exit 127")
+    keeper = refresh.Keeper(ptr)
+    keeper._run()
+    assert keeper.last_fetch["ok"] is False
+    assert keeper.last_fetch["exit_code"] == 127
+    assert "diagnosing" in keeper.last_fetch["output_tail"]
+
+    on_disk = status.last_fetch(ptr.path)
+    assert on_disk["exit_code"] == 127 and on_disk["trigger"] == "keeper"
+
+
+def test_successful_fetch_clears_the_record(tmp_path):
+    ptr = make(tmp_path, data="out.json", auto_refresh=True, fetch=TOUCH)
+    keeper = refresh.Keeper(ptr)
+    keeper._run()
+    assert keeper.last_fetch["ok"] is True
+    assert status.last_fetch(ptr.path)["ok"] is True
+
+
+def test_wedged_fetch_is_recorded_as_a_timeout(tmp_path, monkeypatch):
+    monkeypatch.setattr(refresh, "FETCH_TIMEOUT", 0.2)
+    ptr = make(tmp_path, data="out.json", auto_refresh=True, fetch="sleep 5")
+    keeper = refresh.Keeper(ptr)
+    keeper._run()
+    assert keeper.last_fetch["ok"] is False
+    assert "timed out" in keeper.last_fetch["error"]
+
+
+def test_keeper_seeds_last_fetch_from_disk(tmp_path):
+    """A fetch that failed BEFORE launch — cron overnight, `tart run`'s
+    pre-launch refresh — must be visible from the artifact's first frame."""
+    ptr = make(tmp_path, data="out.json", auto_refresh=True, fetch=TOUCH)
+    status.record_fetch(ptr.path, trigger="cli", duration=0.1, exit_code=127)
+    keeper = refresh.Keeper(ptr)
+    assert keeper.last_fetch["exit_code"] == 127
 
 
 def _wait_until(predicate, timeout=3.0):

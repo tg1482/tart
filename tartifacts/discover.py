@@ -14,10 +14,11 @@ reported rather than silently resolved to whichever was scanned first.
 from __future__ import annotations
 
 import shutil
+import time
 from collections import Counter
 from pathlib import Path
 
-from . import index, manifest as manifest_mod, registry, roots
+from . import fmt, index, manifest as manifest_mod, registry, roots, status as status_mod
 from .manifest import Manifest
 
 
@@ -138,6 +139,15 @@ def listing() -> list[tuple[str, str, str, str]]:
         status = f"[live in {entry.where}]" if entry else ""
         if found.is_stale():
             status = (status + " ⚠ data stale").strip()
+        # "Stale" says the data is old; this says WHY it will stay old. A cron
+        # fetch failing all night used to render identically to "5 minutes
+        # past its limit" — the frozen dashboard with no way to learn why.
+        last = status_mod.last_fetch(found.path)
+        if last is not None and not last.get("ok"):
+            why = status_mod.describe(last)
+            why = why if len(why) <= 48 else why[:47] + "…"  # a row, not a report
+            when = fmt.age(time.time() - last.get("at", 0))
+            status = (status + f" ✗ fetch failed ({why}, {when} ago)").strip()
         rows.append((name, found.title, str(found.root), status))
 
     declared_paths = {_canon(m.path) for m in manifests}
