@@ -1,8 +1,0 @@
-{
-  "title": "Disk & reclaimable",
-  "run": "$TART_PYTHON examples/space_show.py",
-  "data": "examples/data/space.json",
-  "fetch": "$TART_PYTHON examples/space_fetch.py",
-  "stale_after": "6h",
-  "auto_refresh": false
-}

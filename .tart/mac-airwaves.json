@@ -1,8 +1,0 @@
-{
-  "title": "Wi-Fi & Bluetooth",
-  "run": "$TART_PYTHON examples/airwaves_show.py",
-  "data": "examples/data/airwaves.json",
-  "fetch": "$TART_PYTHON examples/airwaves_fetch.py",
-  "stale_after": "3m",
-  "auto_refresh": true
-}

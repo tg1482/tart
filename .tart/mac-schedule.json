@@ -1,8 +1,0 @@
-{
-  "title": "Scheduled jobs",
-  "run": "$TART_PYTHON examples/schedule_show.py",
-  "data": "examples/data/schedule.json",
-  "fetch": "$TART_PYTHON examples/schedule_fetch.py",
-  "stale_after": "10m",
-  "auto_refresh": false
-}

@@ -1,8 +1,0 @@
-{
-  "title": "Machine vitals",
-  "run": "$TART_PYTHON examples/vitals_show.py",
-  "data": "examples/data/vitals.json",
-  "fetch": "$TART_PYTHON examples/vitals_fetch.py",
-  "stale_after": "1m",
-  "auto_refresh": true
-}
