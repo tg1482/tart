@@ -96,3 +96,29 @@ def test_recent_timestamp(tmp_path):
     path = spec(tmp_path)
     status.record_fetch(path, trigger="cli", duration=0.1, exit_code=0)
     assert abs(time.time() - status.last_fetch(path)["at"]) < 5
+
+
+def test_recorded_output_is_stripped_of_terminal_escapes(tmp_path):
+    """What gets recorded gets PRINTED later — by `tart logs`, the warning
+    bar, `tart list`. Replaying a fetch's escape sequences at view time is
+    how a log clears your screen; newlines and tabs survive, ESC does not."""
+    path = spec(tmp_path)
+    status.record_fetch(path, trigger="cli", duration=0.1, exit_code=1,
+                        output="\x1b[2Jline one\n\tline two\x07",
+                        error="bad \x1b]0;pwned\x07 thing")
+    last = status.last_fetch(path)
+    assert "\x1b" not in last["output_tail"] and "\x07" not in last["output_tail"]
+    assert "line one\n\tline two" in last["output_tail"]
+    assert "\x1b" not in last["error"]
+    assert "\x1b" not in status.log_tail(path, lines=100)
+
+
+def test_recorder_files_are_private_to_the_owner(tmp_path):
+    """Fetch output can contain secrets (a traceback echoing a header) and
+    now persists — the umask doesn't get a say."""
+    path = spec(tmp_path)
+    status.record_fetch(path, trigger="cli", duration=0.1, exit_code=1, output="x")
+    directory = status.artifact_dir(path)
+    assert directory.stat().st_mode & 0o777 == 0o700
+    assert (directory / "status.json").stat().st_mode & 0o777 == 0o600
+    assert status.log_path(path).stat().st_mode & 0o777 == 0o600

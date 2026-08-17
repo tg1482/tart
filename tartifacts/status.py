@@ -25,10 +25,25 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import re
 import time
 from pathlib import Path
 
 from . import jsonfile, paths
+
+# What gets recorded is later PRINTED — by `tart logs`, the warning bar,
+# `tart list`. A fetch's stderr can carry terminal escape sequences (its
+# own colours, or an API error body someone else controls), and replaying
+# those at view time is how a log clears your screen or retitles your
+# window. Strip everything but newline and tab at record time; colours
+# read fine stripped, and diagnosis text survives.
+CONTROL_CHARS = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
+
+# Fetch output can contain secrets (a traceback echoing a header, an
+# env-var dump) and now persists — so the recorder's files are private to
+# the owner, not left to the umask.
+DIR_MODE, FILE_MODE = 0o700, 0o600
 
 # Enough context to diagnose a failing fetch; small enough to store whole.
 TAIL_CHARS = 2000
@@ -66,14 +81,17 @@ def record_fetch(
         "duration": round(duration, 2),
         "exit_code": exit_code,
         "ok": exit_code == 0 and error is None,
-        "error": error,
-        "output_tail": output[-TAIL_CHARS:],
+        "error": CONTROL_CHARS.sub("", error) if error else error,
+        "output_tail": CONTROL_CHARS.sub("", output[-TAIL_CHARS:]),
         "path": path,
     }
     directory = artifact_dir(manifest_path)
     try:
+        directory.mkdir(parents=True, exist_ok=True)
+        os.chmod(directory, DIR_MODE)
         jsonfile.write(directory / "status.json", {"fetch": entry})
-        _append_log(directory / "fetch.log", entry, output)
+        os.chmod(directory / "status.json", FILE_MODE)
+        _append_log(directory / "fetch.log", entry)
     except OSError:
         pass
     return entry
@@ -109,14 +127,14 @@ def log_tail(manifest_path: Path, lines: int = 60) -> str:
     return "\n".join(text.splitlines()[-lines:])
 
 
-def _append_log(path: Path, entry: dict, output: str) -> None:
+def _append_log(path: Path, entry: dict) -> None:
     stamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(entry["at"]))
     verdict = "ok" if entry["ok"] else f"FAILED ({describe(entry)})"
     header = f"── {stamp} {entry['trigger']} {verdict} in {entry['duration']}s"
-    body = output[-TAIL_CHARS:].rstrip()
-    path.parent.mkdir(parents=True, exist_ok=True)
+    body = entry["output_tail"].rstrip()  # already stripped of control chars
     with open(path, "a") as f:
         f.write(header + "\n" + (body + "\n" if body else ""))
+    os.chmod(path, FILE_MODE)
     _cap(path)
 
 
