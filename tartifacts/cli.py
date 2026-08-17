@@ -68,7 +68,7 @@ def main() -> None:
     elif cmd == "render" and len(args) >= 2:
         _render(args[1], args[2:])
     elif cmd == "fetch" and len(args) >= 2:
-        _fetch_cmd(args[1])
+        _fetch_cmd(args[1:])
     elif cmd == "logs" and len(args) >= 2:
         _logs(args[1])
     elif cmd == "cron" and len(args) >= 2:
@@ -312,11 +312,25 @@ def _exec(found: Manifest, command: str, extra: list[str]) -> None:
     os.execvp("sh", ["sh", "-c", full])
 
 
-def _fetch_cmd(name: str) -> None:
-    ptr = _resolve_or_exit(name)
+def _fetch_cmd(args: list[str]) -> None:
+    """`--if-stale` makes the two freshness layers cooperative instead of
+    duplicative: the cron line uses it, so a standing order defers to a
+    fetch the keeper (or anyone) already did, rather than re-running an
+    expensive command against fresh data on every firing."""
+    names = [a for a in args if not a.startswith("--")]
+    if not names:
+        print("usage: tart fetch <name> [--if-stale]", file=sys.stderr)
+        sys.exit(1)
+    ptr = _resolve_or_exit(names[0])
     if not ptr.fetch:
         print(f'{ptr.path} has no "fetch" command', file=sys.stderr)
         sys.exit(1)
+    if "--if-stale" in args and not _needs_fetch(ptr):
+        age = ptr.data_age()
+        print(f"data is fresh ({fmt.age(age or 0)} old"
+              + (f", limit {fmt.age(ptr.stale_after)}" if ptr.stale_after else "")
+              + ") — nothing to do")
+        return
     sys.exit(_fetch(ptr))
 
 
@@ -527,7 +541,7 @@ def _cron_line(name: str, ptr: Manifest) -> str:
     line = (
         f"{_cron_schedule(ptr.stale_after, name)} "
         f"PATH={shlex.quote(os.environ.get('PATH', '/usr/bin:/bin'))} "
-        f"{binary} fetch {shlex.quote(name)}"
+        f"{binary} fetch --if-stale {shlex.quote(name)}"
     )
     # cron treats an unescaped % as end-of-command (the rest becomes stdin)
     # — a % anywhere in PATH or a name would silently truncate the command.

@@ -584,7 +584,7 @@ def test_cron_show_bakes_in_path_and_a_stale_after_matched_cadence(workspace):
     line = result.stdout.strip()
     # minute is staggered by name hash so hourly artifacts don't pile on :00
     assert re.match(r"^\d{1,2} \*/1 \* \* \* PATH=", line)
-    assert line.endswith("fetch demo")
+    assert line.endswith("fetch --if-stale demo")
     assert not (home / "crontab.txt").exists()     # --show installs nothing
 
 
@@ -706,8 +706,8 @@ def test_contract_cron_name_actually_registers(workspace):
     result = tart("cron", "demo", home=home, cwd=tmp_path)
     assert result.returncode == 0
     installed = (home / "crontab.txt").read_text()
-    assert re.search(r"\d{1,2} \*/1 \* \* \* PATH=.* fetch demo$", installed, re.M)
-    assert installed.count("fetch demo") == 1
+    assert re.search(r"\d{1,2} \*/1 \* \* \* PATH=.* fetch --if-stale demo$", installed, re.M)
+    assert installed.count("fetch --if-stale demo") == 1
 
 
 def test_contract_registration_survives_sync_and_never_duplicates(workspace):
@@ -718,7 +718,7 @@ def test_contract_registration_survives_sync_and_never_duplicates(workspace):
     tart("cron", "demo", home=home, cwd=tmp_path)      # idempotent
     tart("cron", "--sync", home=home, cwd=tmp_path)    # demo has no auto_refresh
     installed = (home / "crontab.txt").read_text()
-    assert installed.count("fetch demo") == 1
+    assert installed.count("fetch --if-stale demo") == 1
 
 
 def test_contract_sync_registers_auto_refresh_artifacts(workspace):
@@ -731,7 +731,7 @@ def test_contract_sync_registers_auto_refresh_artifacts(workspace):
     tart("trust", "demo", home=home, cwd=tmp_path)
 
     tart("cron", "--sync", home=home, cwd=tmp_path)
-    assert "fetch demo" in (home / "crontab.txt").read_text()
+    assert "fetch --if-stale demo" in (home / "crontab.txt").read_text()
 
 
 def test_contract_sync_preserves_the_users_own_crontab_lines(workspace):
@@ -740,7 +740,7 @@ def test_contract_sync_preserves_the_users_own_crontab_lines(workspace):
     tart("cron", "demo", home=home, cwd=tmp_path)
     installed = (home / "crontab.txt").read_text()
     assert "0 3 * * * backup.sh" in installed
-    assert "fetch demo" in installed
+    assert "fetch --if-stale demo" in installed
 
 
 def test_contract_stale_data_is_never_silent_on_any_read_surface(workspace):
@@ -772,3 +772,23 @@ def test_contract_persistent_failure_reads_as_a_duration(workspace):
 
     assert "✗ fetch failing for" in tart("list", home=home, cwd=tmp_path).stdout
     assert "failing for" in tart("logs", "demo", home=home, cwd=tmp_path).stdout
+
+
+def test_contract_cron_layer_defers_to_fresh_data(workspace):
+    """The two freshness layers must cooperate, not duplicate: a standing
+    order firing against data the keeper just fetched does nothing."""
+    tmp_path, home, repo = workspace
+    tart("fetch", "demo", home=home, cwd=tmp_path)     # keeper's work, simulated
+    marker = repo / "data" / "out.json"
+    before = marker.stat().st_mtime
+
+    result = tart("fetch", "--if-stale", "demo", home=home, cwd=tmp_path)
+    assert result.returncode == 0
+    assert "nothing to do" in result.stdout
+    assert marker.stat().st_mtime == before           # really did nothing
+
+    old = before - 7200
+    os.utime(marker, (old, old))                       # now 2h past the 1h limit
+    result = tart("fetch", "--if-stale", "demo", home=home, cwd=tmp_path)
+    assert result.returncode == 0
+    assert marker.stat().st_mtime > old               # stale -> actually fetched

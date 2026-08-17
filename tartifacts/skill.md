@@ -24,7 +24,7 @@ place a path is declared, so neither script repeats it.
 | `tart render <name> --json` | print its `summary()` as JSON |
 | `tart render <name> --state '<json>'` | merge JSON into state first — how you review a keypress path headlessly |
 | `tart render <name> --states` | render the base frame plus every state declared in the manifest — the smoke matrix |
-| `tart fetch <name>` | re-run its data-producing command now |
+| `tart fetch <name>` | re-run its data-producing command now (`--if-stale` to skip when data is within its limit — what the managed cron lines use) |
 | `tart logs <name>` | the last fetch's outcome and output — including background and cron fetches |
 | `tart cron <name>` | register a standing fetch in the managed crontab block, current PATH and absolute binary baked in (`--show` to preview without installing) |
 | `tart cron --sync` | refresh the managed block: every trusted `auto_refresh` artifact (stale_after ≥ 10m) plus every name ever `tart cron <name>`-registered; staggered minutes, unmanaged lines untouched |
@@ -70,7 +70,10 @@ refetches while an artifact is open — good for fast cadences and the `r`
 key, but it only exists while a pane is open. `tart cron --sync` is the
 standing order: a managed crontab block fetching every trusted
 `auto_refresh` artifact at its `stale_after` cadence whether anything is
-open or not. Sub-10-minute cadences stay keeper-only.
+open or not. Sub-10-minute cadences stay keeper-only. The layers
+cooperate rather than duplicate: managed cron lines use
+`fetch --if-stale`, so a firing defers to data the keeper already
+refreshed.
 
 **Exit codes**, so cron and CI can gate on tart rather than grep its output:
 `render` (both modes) is non-zero if the artifact fails to render OR a
