@@ -151,7 +151,17 @@ def run(
         _headless_once(sources, state, render, args, pinned)
         return
 
-    _interactive(title, manifest, sources, state, render, _keys(rows, on_key, keys), pinned)
+    outcome = _interactive(
+        title, manifest, sources, state, render, _keys(rows, on_key, keys), pinned
+    )
+    if outcome == "restart":
+        # The artifact's own code changed on disk. Data hot-reloads but
+        # imported code never does, so a long-lived artifact was running
+        # old code against new data until it crashed (KeyError on a field
+        # the old render never knew). Re-exec picks up the new code with
+        # the same argv, cwd and environment; the registry entry re-forms
+        # on startup. Like a Neovim dev-mode plugin reload, but wholesale.
+        os.execv(sys.executable, [sys.executable, *sys.argv])
 
 
 def _keys(rows, on_key, bound=None):
@@ -371,6 +381,7 @@ def _interactive(title, manifest, sources, state, render, keys, pinned=frozenset
     source_names = list(sources)
     data_error: str | None = None
     name = Path(manifest_path).stem if manifest_path else None
+    watched = _code_files(state.get("manifest"))
 
     def frame():
         # The warning bar rides ABOVE the artifact's own frame: rich's
@@ -424,12 +435,53 @@ def _interactive(title, manifest, sources, state, render, keys, pinned=frozenset
                 except Empty:
                     pass
 
+                if _code_changed(watched):
+                    return "restart"
+
                 # Redraw every tick, not only on new data: a keypress moves
                 # the cursor without changing any source.
                 live.update(frame())
     finally:
+        if keeper:
+            # The keeper thread is a daemon, but an in-flight fetch is a
+            # real child that would outlive us and rewrite the data file
+            # after the artifact is gone.
+            keeper.stop()
         if manifest_path:
             registry.unregister()
+
+
+def _code_files(declared) -> dict[str, float | None]:
+    """The run command's own scripts, with their mtimes — what the live
+    loop watches to restart on edit. Scripts named in `run` only: a fetch
+    script spawns fresh each time and needs no restart, and modules the
+    script imports are beyond a filename scan."""
+    if declared is None or not declared.run:
+        return {}
+    return {
+        str(declared.root / script): _file_mtime(declared.root / script)
+        for script in manifest_mod.named_scripts(declared.run)
+    }
+
+
+def _code_changed(watched: dict[str, float | None]) -> bool:
+    """True when a watched script's mtime moved AND every watched file
+    exists once the dust settles — an editor's write-rename dance briefly
+    shows a missing file, and restarting into that moment would exec a
+    script that isn't there."""
+    if not any(_file_mtime(path) != old for path, old in watched.items()):
+        return False
+    time.sleep(0.3)  # let the editor finish its multi-step save
+    for path in watched:
+        watched[path] = _file_mtime(path)
+    return all(mtime is not None for mtime in watched.values())
+
+
+def _file_mtime(path) -> float | None:
+    try:
+        return os.path.getmtime(path)
+    except OSError:
+        return None
 
 
 def _warning(data_error: str | None, keeper, name: str | None) -> str | None:

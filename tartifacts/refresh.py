@@ -14,6 +14,7 @@ who caused it.
 from __future__ import annotations
 
 import os
+import signal
 import subprocess
 import threading
 import time
@@ -42,6 +43,8 @@ class Keeper:
         self._wake = threading.Event()
         self._force = False
         self._lock = threading.Lock()
+        self._stopped = False
+        self._proc: subprocess.Popen | None = None
         # Seeded from disk so a fetch that failed BEFORE launch — cron
         # overnight, `tart run`'s own pre-launch refresh — is visible from
         # the first frame, not only after this keeper's first attempt.
@@ -63,6 +66,17 @@ class Keeper:
             self._force = True
         self._wake.set()
 
+    def stop(self) -> None:
+        """Called when the artifact quits. The keeper thread is a daemon so
+        the interpreter won't wait for it — but an in-flight fetch is a real
+        child process that would outlive us, still writing the data file
+        after the artifact is gone."""
+        self._stopped = True
+        self._wake.set()
+        proc = self._proc
+        if proc is not None and proc.poll() is None:
+            kill_group(proc)
+
     def should_fetch(self) -> bool:
         """Auto-refresh means "re-run fetch when the data passes
         `stale_after`". With no `stale_after`, is_stale() is None — and
@@ -80,9 +94,11 @@ class Keeper:
         return max(MIN_CHECK_INTERVAL, limit * CHECK_FRACTION) if limit else MIN_CHECK_INTERVAL
 
     def _loop(self) -> None:
-        while True:
+        while not self._stopped:
             self._wake.wait(self._interval())
             self._wake.clear()
+            if self._stopped:
+                return
             with self._lock:
                 forced, self._force = self._force, False
             # is_stale() is None when data is missing or unjudgeable — both
@@ -115,26 +131,43 @@ class Keeper:
                 return
         env["TART_MANIFEST"] = str(self.manifest.path.resolve())
         try:
-            proc = subprocess.run(
+            # start_new_session: a timeout (or stop()) must kill the whole
+            # process GROUP — killing only `sh` left the real fetch alive,
+            # possibly rewriting the data file after everyone moved on.
+            proc = subprocess.Popen(
                 self.manifest.fetch, shell=True, cwd=self.manifest.root, env=env,
-                capture_output=True, text=True, timeout=FETCH_TIMEOUT, check=False,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                start_new_session=True,
             )
-        except subprocess.TimeoutExpired as bad:
-            self.last_fetch = record(
-                error=f"timed out after {FETCH_TIMEOUT:.0f}s", output=_text(bad.output)
-            )
-            return
         except OSError as bad:
             self.last_fetch = record(error=str(bad))
             return
+        self._proc = proc
+        try:
+            out, err = proc.communicate(timeout=FETCH_TIMEOUT)
+        except subprocess.TimeoutExpired:
+            kill_group(proc)
+            out, err = proc.communicate()  # whatever it said before dying
+            if not self._stopped:
+                self.last_fetch = record(
+                    error=f"timed out after {FETCH_TIMEOUT:.0f}s",
+                    output=(out or "") + (err or ""),
+                )
+            return
+        finally:
+            self._proc = None
+        if self._stopped:
+            return  # killed by stop(); a cancelled fetch is not a failed one
         self.last_fetch = record(
-            exit_code=proc.returncode,
-            output=(proc.stdout or "") + (proc.stderr or ""),
+            exit_code=proc.returncode, output=(out or "") + (err or "")
         )
 
 
-def _text(output: str | bytes | None) -> str:
-    """TimeoutExpired carries whatever was captured so far — as bytes."""
-    if output is None:
-        return ""
-    return output.decode(errors="replace") if isinstance(output, bytes) else output
+def kill_group(proc: subprocess.Popen) -> None:
+    """SIGKILL the process group a `start_new_session` child leads; falls
+    back to the child alone if the group is already gone."""
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except OSError:
+        proc.kill()
+    proc.wait()

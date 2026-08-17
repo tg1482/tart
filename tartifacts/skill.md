@@ -452,11 +452,12 @@ declares no `summary()`.
   `--with <path>`.** `uv run --with <path>` builds and caches a wheel, so
   edits silently don't apply. Artifacts that just *use* tart should depend
   on the released package: `--with tartifacts`.
-- **A running artifact does NOT pick up tart changes — restart it.**
-  Python imports at startup, so `--with-editable` only helps the *next*
-  process. After upgrading tart, `q` and `tart run <name>` again,
-  or the artifact keeps running the old code (a keypress silently doing the
-  old thing is the confusing version of this).
+- **Editing an artifact's own run script restarts it automatically.** The
+  live loop watches the `.py`/`.sh` files named in `run` and re-execs when
+  one changes — data hot-reloads were leaving old code running against new
+  data until it crashed. Two limits: modules the script *imports* aren't
+  watched, and **tart itself isn't either** — after upgrading tart, `q`
+  and `tart run <name>` again.
 - **rich's `screen=True` Live crops, it doesn't paginate.** Anything below
   an over-tall table silently disappears — budget with
   `remaining_height(console, *your_fixed_renderables)`, which measures them

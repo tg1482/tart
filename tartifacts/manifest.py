@@ -25,6 +25,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shlex
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -112,6 +113,17 @@ class Manifest:
         if age is None or self.stale_after is None:
             return None
         return age > self.stale_after
+
+
+def named_scripts(command: str) -> list[str]:
+    """Local script files a command refers to — a .py/.sh token that isn't
+    an option. The trust refusal shows them (the code is in the script, not
+    the manifest), and the live loop watches them to restart on edit."""
+    try:
+        tokens = shlex.split(command)
+    except ValueError:
+        return []  # unbalanced quotes — not our job to parse shell
+    return [t for t in tokens if t.endswith((".py", ".sh")) and not t.startswith("-")]
 
 
 def current() -> Manifest | None:

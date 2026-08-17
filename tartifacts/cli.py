@@ -124,7 +124,7 @@ def _run(name: str, extra: list[str]) -> None:
     # Refresh first when the data is declared-stale (or absent) and we know
     # how to produce it — otherwise the artifact opens showing numbers its own
     # manifest says not to trust.
-    if ptr.fetch and ptr.is_stale() is not False:
+    if ptr.fetch and _needs_fetch(ptr):
         print(f"data stale or missing, running fetch: {ptr.fetch}", file=sys.stderr)
         _fetch(ptr, trigger="run")
 
@@ -158,7 +158,7 @@ def _require_trust(found: Manifest) -> None:
     for label, command in (("run", found.run), ("fetch", found.fetch)):
         if command:
             print(f"  {label:<6} {command}", file=sys.stderr)
-            scripts += named_scripts(found.root, command)
+            scripts += manifest_mod.named_scripts(command)
     if scripts:
         print("\nWhich is really these files. Read them, not just the manifest:",
               file=sys.stderr)
@@ -268,6 +268,19 @@ def _fetch_cmd(name: str) -> None:
     sys.exit(_fetch(ptr))
 
 
+def _needs_fetch(ptr: Manifest) -> bool:
+    """Missing data is worth fetching, declared-stale data is worth
+    fetching. Present data with no `stale_after` is NOT: is_stale() is None
+    there, and treating unjudgeable as "fetch" re-ran a potentially
+    expensive command on every single launch — the same bug the keeper's
+    should_fetch() already fixed for the background path."""
+    if ptr.data_path is None:
+        return True  # no file to judge by; the declared fetch is all we have
+    if not ptr.data_path.exists():
+        return True
+    return ptr.is_stale() is True
+
+
 def _mtime(path: Path | None) -> float | None:
     try:
         return path.stat().st_mtime if path else None
@@ -304,9 +317,13 @@ def _fetch(ptr: Manifest, trigger: str = "cli") -> int:
 
     tail: deque[str] = deque(maxlen=200)
     try:
+        # start_new_session: the command is a shell line, so killing on
+        # timeout must reach the whole process GROUP. Killing only `sh`
+        # left the real fetch (`uv run python snapshot.py`, `curl`) alive —
+        # possibly rewriting the data file minutes after tart reported 124.
         proc = subprocess.Popen(
             ptr.fetch, shell=True, cwd=ptr.root, env=env,
-            stderr=subprocess.PIPE, text=True,
+            stderr=subprocess.PIPE, text=True, start_new_session=True,
         )
     except OSError as bad:
         record(error=str(bad))
@@ -321,8 +338,7 @@ def _fetch(ptr: Manifest, trigger: str = "cli") -> int:
     except subprocess.TimeoutExpired:
         # Bounded like the background keeper's, so a wedged fetch can't hang
         # `tart run` before the artifact ever draws.
-        proc.kill()
-        proc.wait()
+        refresh.kill_group(proc)
         record(error=f"timed out after {refresh.FETCH_TIMEOUT:.0f}s", output="".join(tail))
         print(f"fetch timed out after {refresh.FETCH_TIMEOUT:.0f}s", file=sys.stderr)
         return 124  # the conventional timeout status
@@ -433,14 +449,6 @@ def _logs(name: str) -> None:
         print(log)
 
 
-def named_scripts(root: Path, command: str) -> list[str]:
-    """Local script files a command refers to — a .py/.sh token that isn't an
-    option. Used by the trust refusal to show what a manifest would run."""
-    try:
-        tokens = shlex.split(command)
-    except ValueError:
-        return []  # unbalanced quotes — not our job to parse shell
-    return [t for t in tokens if t.endswith((".py", ".sh")) and not t.startswith("-")]
 
 
 if __name__ == "__main__":

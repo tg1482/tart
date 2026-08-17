@@ -40,6 +40,23 @@ exports.
 - `tart cron <name>` prints a crontab line with the current PATH and the
   absolute tart binary baked in, at a cadence matching `stale_after`
 
+**Lifecycle correctness.** A process tart started never outlives tart's
+interest in it, and liveness claims are checkable.
+
+- editing an artifact's run script restarts it in place: the live loop
+  watches the `.py`/`.sh` files named in `run` and re-execs on change —
+  data hot-reloaded but code didn't, so a long-lived artifact ran old
+  code against new data until it crashed
+- fetches run in their own process group; a timeout kills the whole
+  group, not just `sh` — the real fetch used to survive and rewrite the
+  data file after tart reported 124
+- quitting an artifact kills the keeper's in-flight fetch instead of
+  orphaning it (a cancelled fetch is not recorded as a failure)
+- `[live]` entries are checked against the process's actual start time
+  (`ps -o etime=`), so a reused pid no longer reads as live forever
+- `tart run` no longer refetches on every launch when data is present
+  but `stale_after` is undeclared — the CLI twin of the keeper bug
+
 ## 0.1.0 — unreleased
 
 First public release of **live terminal artifacts** — dashboards that

@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -69,6 +70,51 @@ def _alive(pid: int) -> bool:
     return True
 
 
+def _started_near(pid: int, recorded: float) -> bool:
+    """Guards against pid reuse: signal 0 says A process exists, not that
+    it is OUR process. An artifact killed -9 whose pid the OS later handed
+    to something unrelated would read as `[live]` indefinitely. `ps -o
+    etime=` (POSIX) gives the impostor away: its start time is hours from
+    the one the entry recorded."""
+    try:
+        out = subprocess.run(
+            ["ps", "-p", str(pid), "-o", "etime="],
+            capture_output=True, text=True, timeout=5,
+        ).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return True  # can't tell — keep the entry rather than evict a live one
+    if not out:
+        # kill(0) already said the pid exists; ps disagreeing means a
+        # restricted /proc or another user's hidden process, not death.
+        # Eviction needs positive evidence (a mismatched start time).
+        return True
+    elapsed = _parse_etime(out)
+    if elapsed is None:
+        return True
+    return abs((time.time() - elapsed) - recorded) < 120.0
+
+
+def _parse_etime(text: str) -> float | None:
+    """ps etime: `SS`, `MM:SS`, `HH:MM:SS`, or `D-HH:MM:SS`."""
+    days = 0
+    if "-" in text:
+        head, _, text = text.partition("-")
+        try:
+            days = int(head)
+        except ValueError:
+            return None
+    try:
+        fields = [int(part) for part in text.split(":")]
+    except ValueError:
+        return None
+    if not 1 <= len(fields) <= 3:
+        return None
+    seconds = 0
+    for field in fields:
+        seconds = seconds * 60 + field
+    return days * 86400.0 + seconds
+
+
 def register(manifest: str, title: str, pane: str | None = None) -> None:
     try:
         tty = os.ttyname(0)
@@ -111,7 +157,7 @@ def live() -> list[Entry]:
         except (OSError, json.JSONDecodeError, TypeError):
             path.unlink(missing_ok=True)
             continue
-        if _alive(entry.pid):
+        if _alive(entry.pid) and _started_near(entry.pid, entry.started_at):
             entries.append(entry)
         else:
             path.unlink(missing_ok=True)
