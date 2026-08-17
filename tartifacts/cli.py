@@ -519,12 +519,19 @@ def _cron(args: list[str]) -> None:
 
 
 def _cron_line(name: str, ptr: Manifest) -> str:
-    binary = shutil.which("tart") or f"{sys.executable} -m tartifacts.cli"
-    return (
+    which = shutil.which("tart")
+    binary = (
+        shlex.quote(which) if which
+        else f"{shlex.quote(sys.executable)} -m tartifacts.cli"
+    )
+    line = (
         f"{_cron_schedule(ptr.stale_after, name)} "
         f"PATH={shlex.quote(os.environ.get('PATH', '/usr/bin:/bin'))} "
         f"{binary} fetch {shlex.quote(name)}"
     )
+    # cron treats an unescaped % as end-of-command (the rest becomes stdin)
+    # — a % anywhere in PATH or a name would silently truncate the command.
+    return line.replace("%", "\\%")
 
 
 def _cron_schedule(stale_after: float | None, name: str = "") -> str:
@@ -554,6 +561,13 @@ def _cron_sync(extra: set[str] = frozenset()) -> None:
     Explicitly registered names skip the sub-10m floor — typing the
     command is the opt-in the floor exists to demand."""
     existing = _read_crontab()
+    damage = _marker_problem(existing)
+    if damage:
+        # Never guess at a damaged block: a missing END marker would make
+        # everything below BEGIN look managed — and get deleted.
+        print(f"refusing to touch the crontab: {damage}", file=sys.stderr)
+        print("fix the markers with crontab -e, then re-run", file=sys.stderr)
+        sys.exit(1)
     unmanaged = _strip_managed(existing)
     explicit = _managed_names(existing) | set(extra)
     lines, skipped = [], []
@@ -597,8 +611,16 @@ def _read_crontab() -> str:
     try:
         proc = subprocess.run(["crontab", "-l"], capture_output=True, text=True)
     except OSError:
-        return ""
-    return proc.stdout if proc.returncode == 0 else ""  # no crontab yet
+        return ""  # no crontab binary; the write will fail loudly before harm
+    if proc.returncode == 0:
+        return proc.stdout
+    if "no crontab" in proc.stderr.lower():
+        return ""  # genuinely empty
+    # Any OTHER failure must abort: treating a transient error as "empty"
+    # would make the next write replace the user's whole crontab with just
+    # the managed block.
+    print(f"crontab -l failed: {proc.stderr.strip()}", file=sys.stderr)
+    sys.exit(1)
 
 
 def _write_crontab(text: str) -> None:
@@ -610,6 +632,23 @@ def _write_crontab(text: str) -> None:
     if proc.returncode != 0:
         print(f"crontab refused the update: {proc.stderr.strip()}", file=sys.stderr)
         sys.exit(1)
+
+
+def _marker_problem(text: str) -> str | None:
+    """Why the managed block's markers can't be trusted, or None. Exactly
+    zero or one of each, BEGIN before END — anything else means a human
+    edited the markers, and guessing at the boundary risks eating their
+    lines."""
+    lines = [line.strip() for line in text.splitlines()]
+    begins = [i for i, line in enumerate(lines) if line == CRON_BEGIN]
+    ends = [i for i, line in enumerate(lines) if line == CRON_END]
+    if len(begins) > 1 or len(ends) > 1:
+        return "duplicate managed-block markers"
+    if len(begins) != len(ends):
+        return "unbalanced managed-block markers (one of begin/end is missing)"
+    if begins and begins[0] > ends[0]:
+        return "managed-block end marker appears before the begin marker"
+    return None
 
 
 def _managed_names(text: str) -> set[str]:

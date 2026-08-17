@@ -269,3 +269,66 @@ def test_cron_schedule_staggers_by_name():
     b = cli._cron_schedule(3600, "dash")
     assert a.endswith("*/1 * * *") and b.endswith("*/1 * * *")
     assert a.split()[0] != b.split()[0]         # different minute offsets
+
+
+# --- crontab safety ---------------------------------------------------------
+# The managed block must be unable to damage what it doesn't own. The two
+# data-loss shapes: a hand-edited marker making user lines look managed,
+# and a transient `crontab -l` failure reading as "empty crontab".
+
+
+def test_sync_refuses_a_damaged_marker_instead_of_eating_lines(monkeypatch, tmp_path, capsys):
+    import pytest
+    from tartifacts import cli
+    crontab = tmp_path / "crontab.txt"
+    crontab.write_text(
+        f"0 3 * * * backup.sh\n{cli.CRON_BEGIN}\n* * * * * old tart fetch a\n"
+        "0 4 * * * users-own-job.sh\n"          # END marker was hand-deleted
+    )
+    monkeypatch.setenv("TART_CRONTAB", str(crontab))
+    with pytest.raises(SystemExit):
+        cli._cron_sync()
+    assert "refusing to touch the crontab" in capsys.readouterr().err
+    assert "users-own-job.sh" in crontab.read_text()   # untouched
+
+
+def test_marker_problem_shapes():
+    from tartifacts import cli
+    ok = f"x\n{cli.CRON_BEGIN}\na\n{cli.CRON_END}\ny\n"
+    assert cli._marker_problem(ok) is None
+    assert cli._marker_problem("no markers at all\n") is None
+    assert "unbalanced" in cli._marker_problem(f"{cli.CRON_BEGIN}\na\n")
+    assert "duplicate" in cli._marker_problem(f"{cli.CRON_BEGIN}\n{cli.CRON_END}\n{cli.CRON_BEGIN}\n{cli.CRON_END}\n")
+    assert "before" in cli._marker_problem(f"{cli.CRON_END}\n{cli.CRON_BEGIN}\n")
+
+
+def test_transient_crontab_failure_aborts_rather_than_reading_as_empty(monkeypatch, capsys):
+    import pytest
+    from tartifacts import cli
+
+    monkeypatch.delenv("TART_CRONTAB", raising=False)
+
+    def fake_run(cmd, **kwargs):
+        return type("R", (), {"returncode": 1, "stdout": "",
+                              "stderr": "cron service unavailable"})()
+    monkeypatch.setattr(cli.subprocess, "run", fake_run)
+    with pytest.raises(SystemExit):
+        cli._read_crontab()
+
+    def no_crontab(cmd, **kwargs):
+        return type("R", (), {"returncode": 1, "stdout": "",
+                              "stderr": "no crontab for tanmaygupta"})()
+    monkeypatch.setattr(cli.subprocess, "run", no_crontab)
+    assert cli._read_crontab() == ""                   # genuinely empty is fine
+
+
+def test_cron_line_escapes_percent_and_quotes_the_binary(monkeypatch, tmp_path):
+    from tartifacts import cli, manifest
+    monkeypatch.setenv("PATH", "/usr/bin:/opt/100%tools/bin")
+    monkeypatch.setattr(cli.shutil, "which", lambda name: "/My Drive/bin/tart")
+    spec = tmp_path / "m.json"
+    spec.write_text(json.dumps({"title": "T", "run": "true", "fetch": "true",
+                                "stale_after": "1h"}))
+    line = cli._cron_line("spend", manifest.load(spec))
+    assert "\\%" in line and "100%" not in line.replace("\\%", "")
+    assert "'/My Drive/bin/tart'" in line              # space-safe
