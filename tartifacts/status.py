@@ -74,16 +74,25 @@ def record_fetch(
 
     PATH is recorded because it's the variable that actually differs
     between a shell, the keeper, and cron — `uv: command not found` from a
-    cron line is a PATH diagnosis, and the record should carry it."""
+    cron line is a PATH diagnosis, and the record should carry it.
+
+    `last_ok` carries the last SUCCESS across failures, because "exit 1,
+    21m ago" describes the newest attempt while the question that matters
+    is "how long has this been broken" — an artifact retried every 6
+    minutes for four days and each failure looked 6 minutes old."""
+    ok = exit_code == 0 and error is None
+    previous = last_fetch(manifest_path)
+    now = time.time()
     entry = {
-        "at": time.time(),
+        "at": now,
         "trigger": trigger,
         "duration": round(duration, 2),
         "exit_code": exit_code,
-        "ok": exit_code == 0 and error is None,
+        "ok": ok,
         "error": CONTROL_CHARS.sub("", error) if error else error,
         "output_tail": CONTROL_CHARS.sub("", output[-TAIL_CHARS:]),
         "path": path,
+        "last_ok": now if ok else (previous.get("last_ok") if previous else None),
     }
     directory = artifact_dir(manifest_path)
     try:
@@ -113,6 +122,15 @@ def describe(entry: dict) -> str:
     if entry.get("error"):
         return str(entry["error"])
     return f"exit {entry.get('exit_code')}"
+
+
+def failing_for(entry: dict) -> float | None:
+    """Seconds since this artifact last fetched successfully — when the
+    last attempt failed AND a success has ever been recorded. None means
+    either "not failing" or "no success to measure from"."""
+    if entry.get("ok") or entry.get("last_ok") is None:
+        return None
+    return max(0.0, time.time() - entry["last_ok"])
 
 
 def log_path(manifest_path: Path) -> Path:

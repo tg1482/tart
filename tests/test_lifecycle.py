@@ -174,3 +174,98 @@ def test_our_own_process_stays_live(tmp_path):
         assert os.getpid() in [e.pid for e in registry.live()]
     finally:
         registry.unregister()
+
+
+# --- failing-since ----------------------------------------------------------
+
+
+def test_last_ok_survives_failures(tmp_path):
+    """"exit 1, 21m ago" describes the newest attempt; the question that
+    matters is "how long has this been broken". An artifact retried every
+    6 minutes for four days and each failure looked 6 minutes old."""
+    from tartifacts import status
+    spec = make(tmp_path, fetch="true").path
+    status.record_fetch(spec, trigger="cli", duration=0.1, exit_code=0)
+    status.record_fetch(spec, trigger="keeper", duration=0.1, exit_code=1)
+    status.record_fetch(spec, trigger="keeper", duration=0.1, exit_code=1)
+    last = status.last_fetch(spec)
+    assert last["last_ok"] is not None
+    assert status.failing_for(last) is not None
+    assert status.failing_for(last) < 60          # the success was seconds ago
+
+    status.record_fetch(spec, trigger="cli", duration=0.1, exit_code=0)
+    assert status.failing_for(status.last_fetch(spec)) is None   # healthy again
+
+
+def test_never_succeeded_has_no_failing_duration(tmp_path):
+    from tartifacts import status
+    spec = make(tmp_path, fetch="true").path
+    status.record_fetch(spec, trigger="cli", duration=0.1, exit_code=1)
+    assert status.failing_for(status.last_fetch(spec)) is None
+
+
+# --- tart restart -----------------------------------------------------------
+
+
+def test_restart_signals_restartable_entries_only(monkeypatch, tmp_path, capsys):
+    from tartifacts import cli
+    new = registry.Entry(pid=111, manifest=str(tmp_path / "a.json"), title="New",
+                         started_at=0, restartable=True)
+    old = registry.Entry(pid=222, manifest=str(tmp_path / "b.json"), title="Old",
+                         started_at=0)                     # pre-restart entry
+    monkeypatch.setattr(registry, "live", lambda: [new, old])
+    signalled = []
+    monkeypatch.setattr(cli.os, "kill", lambda pid, sig: signalled.append((pid, sig)))
+
+    cli._restart(["--all"])
+    out = capsys.readouterr().out
+    assert signalled == [(111, cli.signal.SIGUSR1)]        # Old was NOT signalled
+    assert "restarting New" in out
+    assert "launched before restart support" in out        # ...and told why
+
+
+def test_restart_by_name_matches_the_manifest(monkeypatch, tmp_path, capsys):
+    from tartifacts import cli
+    ptr = make(tmp_path, run="true")
+    mine = registry.Entry(pid=111, manifest=str(ptr.path.resolve()), title="Mine",
+                          started_at=0, restartable=True)
+    other = registry.Entry(pid=222, manifest=str(tmp_path / "other.json"),
+                           title="Other", started_at=0, restartable=True)
+    monkeypatch.setattr(registry, "live", lambda: [mine, other])
+    monkeypatch.setattr(cli, "_resolve_or_exit", lambda name: ptr)
+    signalled = []
+    monkeypatch.setattr(cli.os, "kill", lambda pid, sig: signalled.append(pid))
+
+    cli._restart(["thing"])
+    assert signalled == [111]
+
+
+# --- cron --sync block management -------------------------------------------
+
+
+def test_managed_block_preserves_user_lines_and_replaces_itself():
+    from tartifacts import cli
+    user = "PATH=/usr/bin\n0 3 * * * backup.sh\n"
+    once = cli._with_managed_block(user, ["0 * * * * tart fetch a"])
+    twice = cli._with_managed_block(once, ["30 * * * * tart fetch b"])
+
+    assert "backup.sh" in twice
+    assert "tart fetch b" in twice
+    assert "tart fetch a" not in twice          # replaced, not accumulated
+    assert twice.count(cli.CRON_BEGIN) == 1
+
+
+def test_empty_line_list_removes_the_block_entirely():
+    from tartifacts import cli
+    with_block = cli._with_managed_block("0 3 * * * backup.sh\n", ["* * * * * x"])
+    cleared = cli._with_managed_block(with_block, [])
+    assert cli.CRON_BEGIN not in cleared
+    assert "backup.sh" in cleared
+
+
+def test_cron_schedule_staggers_by_name():
+    from tartifacts import cli
+    a = cli._cron_schedule(3600, "ads")
+    b = cli._cron_schedule(3600, "dash")
+    assert a.endswith("*/1 * * *") and b.endswith("*/1 * * *")
+    assert a.split()[0] != b.split()[0]         # different minute offsets

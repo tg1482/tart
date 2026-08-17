@@ -39,6 +39,10 @@ class Entry:
     started_at: float
     pane: str | None = None   # multiplexer pane, when running under one
     tty: str | None = None    # falls back to this to say *where* it is
+    # Whether this process installed the SIGUSR1 restart handler. Entries
+    # from before that existed default False, so `tart restart` can warn
+    # instead of sending a signal whose default action is termination.
+    restartable: bool = False
 
     @property
     def where(self) -> str:
@@ -115,7 +119,8 @@ def _parse_etime(text: str) -> float | None:
     return days * 86400.0 + seconds
 
 
-def register(manifest: str, title: str, pane: str | None = None) -> None:
+def register(manifest: str, title: str, pane: str | None = None,
+             restartable: bool = False) -> None:
     try:
         tty = os.ttyname(0)
     except OSError:
@@ -127,6 +132,7 @@ def register(manifest: str, title: str, pane: str | None = None) -> None:
         "started_at": time.time(),
         "pane": pane,
         "tty": tty,
+        "restartable": restartable,
     }
     try:
         jsonfile.write(_path(os.getpid()), entry)

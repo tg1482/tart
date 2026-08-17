@@ -7,6 +7,8 @@
     tart fetch <name>            re-run an artifact's data-producing command
     tart logs <name>             the last fetch's outcome and output, however it was triggered
     tart cron <name>             a crontab line that keeps its data fresh, PATH included
+    tart cron --sync             install/refresh a managed crontab block for every auto-refresh artifact
+    tart restart <name> | --all  re-exec live artifacts in place — same pane, new code
     tart register <path>         adopt a manifest living outside a scanned root
     tart trust <name>            agree to run this manifest's commands
     tart roots [add|rm <path>]   workspaces scanned for artifacts
@@ -20,6 +22,8 @@ import json
 import os
 import shlex
 import shutil
+import signal
+import zlib
 import subprocess
 import sys
 import threading
@@ -29,14 +33,14 @@ from pathlib import Path
 
 from . import (
     discover, envfile, fmt, index, manifest as manifest_mod, refresh,
-    roots as roots_mod, status, trust,
+    registry, roots as roots_mod, status, trust,
 )
 from .manifest import Manifest
 
 USAGE = (
     "usage: tart list | run <name> | render <name> [--json] | "
-    "fetch <name> | logs <name> | cron <name> | register <path> | trust <name> | "
-    "roots [add|rm <path>] | reindex | --skill"
+    "fetch <name> | logs <name> | cron <name>|--sync | restart <name>|--all | "
+    "register <path> | trust <name> | roots [add|rm <path>] | reindex | --skill"
 )
 
 SKILL_PATH = Path(__file__).with_name("skill.md")
@@ -68,7 +72,9 @@ def main() -> None:
     elif cmd == "logs" and len(args) >= 2:
         _logs(args[1])
     elif cmd == "cron" and len(args) >= 2:
-        _cron(args[1])
+        _cron(args[1:])
+    elif cmd == "restart":
+        _restart(args[1:])
     elif cmd == "register" and len(args) >= 2:
         _register(args[1])
     elif cmd == "trust":
@@ -434,8 +440,51 @@ def _tee(pipe, tail: deque) -> None:
         tail.append(line)
 
 
-def _cron(name: str) -> None:
-    """Print a crontab line that will actually work, PATH included.
+def _restart(args: list[str]) -> None:
+    """Re-exec live artifacts in place — same pane, new code.
+
+    The recurring hazard: a pane launched days ago keeps running old code
+    (tart's AND its own pre-edit scripts) while everything around it moves
+    on — one ran a silently-failing keeper for four days. The artifact
+    installs a SIGUSR1 handler that triggers the same re-exec as the
+    code-change watcher; this sends it. Artifacts launched before the
+    handler existed would DIE on SIGUSR1 (the default action), so those
+    get named instead of signalled."""
+    if not args:
+        print("usage: tart restart <name> | --all", file=sys.stderr)
+        sys.exit(1)
+    entries = registry.live()
+    if args[0] != "--all":
+        target = _resolve_or_exit(args[0]).path.resolve()
+        entries = [e for e in entries if Path(e.manifest).resolve() == target]
+        if not entries:
+            print(f"'{args[0]}' is not running — tart run {args[0]}", file=sys.stderr)
+            sys.exit(1)
+    if not entries:
+        print("nothing is live")
+        return
+    for entry in entries:
+        if not entry.restartable:
+            print(f"{entry.title} ({entry.where}): launched before restart support — "
+                  f"q it and `tart run` again")
+            continue
+        try:
+            os.kill(entry.pid, signal.SIGUSR1)
+            print(f"restarting {entry.title} ({entry.where})")
+        except OSError as bad:
+            print(f"{entry.title} (pid {entry.pid}): {bad}", file=sys.stderr)
+
+
+CRON_BEGIN = "# >>> tart cron --sync — managed block, edits inside are overwritten"
+CRON_END = "# <<< tart cron --sync"
+# Below this, cron adds nothing over the in-artifact keeper (cron can't go
+# sub-minute anyway) and would hammer a fetch that only matters live.
+CRON_MIN_STALE = 600.0
+
+
+def _cron(args: list[str]) -> None:
+    """Print a crontab line that will actually work, PATH included — or,
+    with --sync, install one per auto-refresh artifact as a managed block.
 
     Cron's environment is almost empty — no /opt/homebrew/bin, no ~/.local
     — so the line that works pasted into a shell fails under cron with
@@ -443,36 +492,118 @@ def _cron(name: str) -> None:
     the absolute tart binary into the line removes the whole failure class;
     the flight recorder catches whatever remains.
     """
+    if args[0] == "--sync":
+        _cron_sync()
+        return
+    name = args[0]
     ptr = _resolve_or_exit(name)
     if not ptr.fetch:
         print(f'{ptr.path} has no "fetch" command — nothing for cron to run', file=sys.stderr)
         sys.exit(1)
-    binary = shutil.which("tart") or f"{sys.executable} -m tartifacts.cli"
-    schedule = _cron_schedule(ptr.stale_after)
-    line = (
-        f"{schedule} PATH={shlex.quote(os.environ.get('PATH', '/usr/bin:/bin'))} "
-        f"{binary} fetch {shlex.quote(name)}"
-    )
     if ptr.stale_after is None:
         print("# no stale_after declared — hourly is a guess; adjust freely", file=sys.stderr)
-    print(line)
+    print(_cron_line(name, ptr))
     print(
-        f"\nadd it with: crontab -e"
+        f"\nadd it with: crontab -e   (or `tart cron --sync` to manage it for you)"
         f"\ncheck on it with: tart logs {name}   (every fetch records its outcome)",
         file=sys.stderr,
     )
 
 
-def _cron_schedule(stale_after: float | None) -> str:
+def _cron_line(name: str, ptr: Manifest) -> str:
+    binary = shutil.which("tart") or f"{sys.executable} -m tartifacts.cli"
+    return (
+        f"{_cron_schedule(ptr.stale_after, name)} "
+        f"PATH={shlex.quote(os.environ.get('PATH', '/usr/bin:/bin'))} "
+        f"{binary} fetch {shlex.quote(name)}"
+    )
+
+
+def _cron_schedule(stale_after: float | None, name: str = "") -> str:
     """A cadence matching the declared staleness limit, so the data is
-    never much older than the manifest says to trust."""
+    never much older than the manifest says to trust. The minute offset is
+    hashed from the name so ten hourly artifacts don't all fire at :00."""
+    offset = zlib.crc32(name.encode()) % 60
     if stale_after is None:
-        return "0 * * * *"
+        return f"{offset} * * * *"
     if stale_after < 3600:
         return f"*/{max(5, int(stale_after // 60))} * * * *"
     if stale_after < 86400:
-        return f"0 */{int(stale_after // 3600)} * * *"
-    return "0 9 * * *"
+        return f"{offset} */{int(stale_after // 3600)} * * *"
+    return f"{offset} 9 * * *"
+
+
+def _cron_sync() -> None:
+    """One managed crontab block covering every artifact that declared it
+    wants to stay fresh — the "for good" half of auto_refresh. The keeper
+    only exists while a pane is open, so freshness used to be a side
+    effect of somebody's terminal layout; this makes it a machine-level
+    standing order, using the daemon the OS already runs."""
+    lines, skipped = [], []
+    existing = _read_crontab()
+    unmanaged = _strip_managed(existing)
+    for found in discover.declared():
+        name = found.path.stem
+        if not (found.fetch and found.auto_refresh):
+            continue
+        if not trust.is_trusted(found.path):
+            skipped.append((name, "not trusted"))
+            continue
+        if found.stale_after is not None and found.stale_after < CRON_MIN_STALE:
+            skipped.append((name, f"stale_after under {fmt.age(CRON_MIN_STALE)} — keeper territory"))
+            continue
+        if f"tart fetch {name}" in unmanaged:
+            skipped.append((name, "an unmanaged crontab line already fetches it — left alone"))
+            continue
+        lines.append(_cron_line(name, found))
+    updated = _with_managed_block(existing, lines)
+    if updated != existing:
+        _write_crontab(updated)
+    for line in lines:
+        print(f"installed: {line.split(' PATH=')[0]} … tart fetch {line.rsplit(' ', 1)[-1]}")
+    for name, why in skipped:
+        print(f"skipped:   {name} — {why}")
+    if not lines and not skipped:
+        print("no artifact declares auto_refresh + fetch; nothing to install")
+
+
+def _read_crontab() -> str:
+    try:
+        proc = subprocess.run(["crontab", "-l"], capture_output=True, text=True)
+    except OSError:
+        return ""
+    return proc.stdout if proc.returncode == 0 else ""  # no crontab yet
+
+
+def _write_crontab(text: str) -> None:
+    proc = subprocess.run(["crontab", "-"], input=text, text=True, capture_output=True)
+    if proc.returncode != 0:
+        print(f"crontab refused the update: {proc.stderr.strip()}", file=sys.stderr)
+        sys.exit(1)
+
+
+def _strip_managed(text: str) -> str:
+    """The crontab without our managed block — what --sync must preserve
+    byte for byte. Everything outside the markers belongs to the user."""
+    out, inside = [], False
+    for line in text.splitlines():
+        if line.strip() == CRON_BEGIN:
+            inside = True
+            continue
+        if line.strip() == CRON_END:
+            inside = False
+            continue
+        if not inside:
+            out.append(line)
+    return "\n".join(out)
+
+
+def _with_managed_block(text: str, lines: list[str]) -> str:
+    kept = _strip_managed(text).rstrip("\n")
+    if not lines:
+        return kept + "\n" if kept else ""
+    block = "\n".join([CRON_BEGIN, *lines, CRON_END])
+    return (kept + "\n\n" if kept else "") + block + "\n"
 
 
 def _logs(name: str) -> None:
@@ -486,6 +617,10 @@ def _logs(name: str) -> None:
         f"last fetch: {verdict}, {fmt.age(time.time() - last['at'])} ago "
         f"(trigger: {last['trigger']}, took {last['duration']}s)"
     )
+    broken = status.failing_for(last)
+    if broken is not None:
+        print(f"failing for {fmt.age(broken)} — last success "
+              f"{fmt.age(time.time() - last['last_ok'])} ago")
     if not last["ok"] and last.get("path"):
         # PATH is the variable that actually differs between a shell, the
         # keeper and cron — `uv: command not found` is a PATH diagnosis.

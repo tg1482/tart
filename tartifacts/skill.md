@@ -27,6 +27,8 @@ place a path is declared, so neither script repeats it.
 | `tart fetch <name>` | re-run its data-producing command now |
 | `tart logs <name>` | the last fetch's outcome and output — including background and cron fetches |
 | `tart cron <name>` | print a crontab line that keeps its data fresh — current PATH and absolute binary baked in |
+| `tart cron --sync` | install/refresh a managed crontab block: one line per trusted `auto_refresh` artifact (stale_after ≥ 10m), staggered minutes, unmanaged lines untouched |
+| `tart restart <name> \| --all` | re-exec live artifacts in place (SIGUSR1) — same pane, new code; run it after upgrading tart |
 | `tart register <path>` | adopt a manifest living anywhere — records its location and trusts it |
 | `tart trust <name>` | agree to run this manifest's commands (`--all`, `--list`, `--forget <name>`) |
 | `tart roots add <path>` | register a workspace to scan (`rm` to remove, bare `roots` to list) |
@@ -59,7 +61,16 @@ outcome (exit code, duration, output tail) plus an appended `fetch.log`.
 That record is what `tart list`'s `✗ fetch failed (...)`, the artifact's
 own warning bar, and `tart logs` read. A fetch that fails overnight in
 cron is therefore visible the next morning in all three, with its stderr
-intact.
+intact. The record also carries the last *success*, so a persistent
+failure reads as `✗ fetch failing for 2d (exit 1)` — how long it's been
+broken, not how recent the newest attempt was.
+
+**Freshness has two layers.** The keeper (in-process, `auto_refresh`)
+refetches while an artifact is open — good for fast cadences and the `r`
+key, but it only exists while a pane is open. `tart cron --sync` is the
+standing order: a managed crontab block fetching every trusted
+`auto_refresh` artifact at its `stale_after` cadence whether anything is
+open or not. Sub-10-minute cadences stay keeper-only.
 
 **Exit codes**, so cron and CI can gate on tart rather than grep its output:
 `render` (both modes) is non-zero if the artifact fails to render OR a
@@ -151,7 +162,7 @@ and `tart list` names any manifest that fails to load.
 | `fetch` | no | command that produces `data` |
 | `env_file` | no | KEY=VALUE file loaded into `run`/`fetch`'s environment (`~` expands) — where secrets live |
 | `stale_after` | no | `30s` / `45m` / `4h` / `2d` — when `data` stops being trustworthy |
-| `auto_refresh` | no | re-run `fetch` while open, whenever data passes `stale_after` |
+| `auto_refresh` | no | keep the data fresh: refetch while open (the keeper), and `tart cron --sync` installs a standing cron line for it |
 | `states` | no | `--state` payloads worth checking, e.g. `[{"detail": true}, {"scale": "7d"}]` — `tart render <name> --states` renders each |
 
 Paths are relative to the **repo root** (one level above `.tart/`), and

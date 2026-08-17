@@ -2,6 +2,20 @@
 
 ## unreleased
 
+**Auto-refresh, for good.** A live artifact ran a silently-failing keeper
+for four days: the keeper only exists while a pane is open, the pane ran
+pre-upgrade code, and each failure looked minutes old.
+
+- `tart cron --sync`: a managed, marker-delimited crontab block fetching
+  every trusted `auto_refresh` artifact at its `stale_after` cadence —
+  freshness as a machine-level standing order, not a side effect of a
+  pane being open. Minutes staggered by name; unmanaged lines untouched;
+  sub-10m cadences stay keeper-only
+- `tart restart <name> | --all`: artifacts install a SIGUSR1 handler that
+  re-execs them in place (same pane, new code); run after upgrading tart.
+  Pre-handler processes are named, not signalled
+- the fetch record carries the last success: surfaces read
+  `✗ fetch failing for 2d (exit 1)` instead of the newest attempt's age
 - headless renders warn on stderr when the data is past its declared
   `stale_after` (exit still 0 — stale numbers are usable, but an agent
   reading `--json` was getting 6-hour-old data against a 1h declaration

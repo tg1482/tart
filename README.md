@@ -68,7 +68,8 @@ tart run <name>              # launch, fetching first if stale
 tart render <name> [--json]  # one frame headless, or the numbers as JSON
 tart fetch <name>            # re-run its data command
 tart logs <name>             # the last fetch's outcome and output, even from cron
-tart cron <name>             # a crontab line that keeps it fresh, PATH included
+tart cron --sync             # standing cron block: auto_refresh artifacts stay fresh unattended
+tart restart --all           # re-exec live artifacts in place — same pane, new code
 tart register <path>         # adopt a manifest from anywhere
 tart trust <name>            # approve a scanned manifest
 tart roots add <path>        # a workspace to scan

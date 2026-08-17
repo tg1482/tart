@@ -10,6 +10,7 @@ directory, an entry point renamed out from under the package.
 
 import json
 import os
+import re
 import subprocess
 import sys
 import textwrap
@@ -578,7 +579,8 @@ def test_cron_bakes_in_path_and_a_stale_after_matched_cadence(workspace):
     result = tart("cron", "demo", home=home, cwd=tmp_path)
     assert result.returncode == 0
     line = result.stdout.strip()
-    assert line.startswith("0 */1 * * * PATH=")
+    # minute is staggered by name hash so hourly artifacts don't pile on :00
+    assert re.match(r"^\d{1,2} \*/1 \* \* \* PATH=", line)
     assert line.endswith("fetch demo")
     assert "crontab -e" in result.stderr
 

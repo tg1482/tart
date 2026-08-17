@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import json
 import os
+import signal
 import sys
 import threading
 import time
@@ -387,8 +388,18 @@ def _interactive(title, manifest, sources, state, render, keys, pinned=frozenset
 
     manifest_path = str(manifest) if manifest else None
     if manifest_path:
-        registry.register(manifest_path, title, pane=registry.current_pane())
+        registry.register(manifest_path, title, pane=registry.current_pane(),
+                          restartable=True)
         index.remember(Path(manifest_path))  # launched once => findable forever
+
+    # `tart restart` sends SIGUSR1 to re-exec us in place — same pane, new
+    # code. Without a handler the default action is termination, which is
+    # why the registry records that we installed one.
+    restart_requested = threading.Event()
+    try:
+        signal.signal(signal.SIGUSR1, lambda *_: restart_requested.set())
+    except ValueError:
+        pass  # not the main thread (embedded/test harness) — no restart wiring
 
     # Keeps `data` fresh from the manifest's own `fetch`/`stale_after`, so
     # a long-open artifact doesn't sit stale waiting on an external cron.
@@ -454,7 +465,7 @@ def _interactive(title, manifest, sources, state, render, keys, pinned=frozenset
                 except Empty:
                     pass
 
-                if _code_changed(watched):
+                if restart_requested.is_set() or _code_changed(watched):
                     return "restart"
 
                 # Redraw every tick, not only on new data: a keypress moves
@@ -512,6 +523,9 @@ def _warning(data_error: str | None, keeper, name: str | None) -> str | None:
     last = keeper.last_fetch if keeper else None
     if last is not None and not last.get("ok"):
         hint = f" — tart logs {name}" if name else ""
+        broken = ck_status.failing_for(last)
+        if broken is not None:
+            return f"⚠ fetch failing for {fmt.age(broken)} ({ck_status.describe(last)}){hint}"
         return (
             f"⚠ fetch failed ({ck_status.describe(last)}, "
             f"{fmt.age(time.time() - last.get('at', 0))} ago){hint}"

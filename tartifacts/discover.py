@@ -146,8 +146,15 @@ def listing() -> list[tuple[str, str, str, str]]:
         if last is not None and not last.get("ok"):
             why = status_mod.describe(last)
             why = why if len(why) <= 48 else why[:47] + "…"  # a row, not a report
-            when = fmt.age(time.time() - last.get("at", 0))
-            status = (status + f" ✗ fetch failed ({why}, {when} ago)").strip()
+            broken = status_mod.failing_for(last)
+            if broken is not None:
+                # "how long has this been broken" beats "how old is the
+                # newest attempt" — retried every 6 min, each failure
+                # looked 6 minutes old while it was 4 days broken.
+                status = (status + f" ✗ fetch failing for {fmt.age(broken)} ({why})").strip()
+            else:
+                when = fmt.age(time.time() - last.get("at", 0))
+                status = (status + f" ✗ fetch failed ({why}, {when} ago)").strip()
         rows.append((name, found.title, str(found.root), status))
 
     declared_paths = {_canon(m.path) for m in manifests}
