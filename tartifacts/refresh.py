@@ -16,6 +16,7 @@ from __future__ import annotations
 import os
 import signal
 import subprocess
+import sys
 import threading
 import time
 
@@ -130,6 +131,7 @@ class Keeper:
                 )
                 return
         env["TART_MANIFEST"] = str(self.manifest.path.resolve())
+        env["TART_PYTHON"] = sys.executable
         try:
             # start_new_session: a timeout (or stop()) must kill the whole
             # process GROUP — killing only `sh` left the real fetch alive,

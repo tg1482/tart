@@ -71,6 +71,14 @@ interest in it, and liveness claims are checkable.
 - docs: use `widgets.row` for side-by-side panels, not rich's `Columns`
   (rediscovered and hand-rolled per artifact)
 
+**A third of the memory.** `TART_PYTHON` is set for every command tart
+spawns: tart's own interpreter, which has `rich`+`tartifacts` by
+construction. Manifests that use it (`"run": "$TART_PYTHON show.py"`) run
+as one ~20 MB process; the previous `uv run --with rich --with tartifacts`
+pattern kept a ~24-34 MB uv supervisor resident beside each artifact's
+Python (~60 MB each, measured) and paid resolver latency on every fetch.
+`uv run` remains the right call when an artifact needs extra libraries.
+
 ## 0.1.0 — unreleased
 
 First public release of **live terminal artifacts** — dashboards that

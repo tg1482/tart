@@ -196,3 +196,12 @@ def test_keeper_records_the_path_it_ran_under(tmp_path):
     keeper = refresh.Keeper(ptr)
     keeper._run()
     assert keeper.last_fetch["path"] == os.environ.get("PATH")
+
+
+def test_keeper_sets_tart_python(tmp_path):
+    ptr = make(tmp_path, data="out.json", auto_refresh=True,
+               fetch='"$TART_PYTHON" -c "import os; open(\'out.json\',\'w\')'
+                     '.write(\'{}\')"')
+    keeper = refresh.Keeper(ptr)
+    keeper._run()
+    assert keeper.last_fetch["ok"] is True, keeper.last_fetch

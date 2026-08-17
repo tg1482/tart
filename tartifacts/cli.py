@@ -159,7 +159,8 @@ def _render_states(ptr: Manifest) -> None:
     if bad:
         print(f'"states" entries must be JSON objects, got: {bad[0]!r}', file=sys.stderr)
         sys.exit(1)
-    env = {**os.environ, **_env_overlay(ptr), "TART_MANIFEST": str(ptr.path.resolve())}
+    env = {**os.environ, **_env_overlay(ptr),
+           "TART_MANIFEST": str(ptr.path.resolve()), "TART_PYTHON": sys.executable}
     frames = [("(base)", None)] + [(json.dumps(s), s) for s in ptr.states]
     failures = 0
     for label, state in frames:
@@ -298,6 +299,7 @@ def _exec(found: Manifest, command: str, extra: list[str]) -> None:
     os.chdir(found.root)  # so relative paths resolve regardless of caller cwd
     os.environ.update(overlay)
     os.environ["TART_MANIFEST"] = str(found.path.resolve())
+    os.environ["TART_PYTHON"] = sys.executable
     full = " ".join([command, *(shlex.quote(a) for a in extra)])
     # exec, not subprocess: the artifact replaces this process, so herdr/tmux
     # see it directly in the pane and Ctrl-C reaches it with no wrapper.
@@ -358,6 +360,7 @@ def _fetch(ptr: Manifest, trigger: str = "cli") -> int:
             print(f"env_file {ptr.env_file_path} cannot be loaded: {bad}", file=sys.stderr)
             return 1
     env["TART_MANIFEST"] = str(ptr.path.resolve())
+    env["TART_PYTHON"] = sys.executable
 
     tail: deque[str] = deque(maxlen=200)
     try:

@@ -112,6 +112,7 @@ migration for a machine that predates this.
 |---|---|
 | `TART_HOME` | where tart keeps roots, index and live entries (default `~/.tart`) |
 | `TART_MANIFEST` | set by tart for the artifact and fetch scripts it launches — read it via `tartifacts.data_path()`, don't set it by hand |
+| `TART_PYTHON` | set by tart for every command it spawns: its own interpreter, which has `rich`+`tartifacts` — use it as the manifest's interpreter unless you need extra deps |
 | `TMUX_PANE` / `HERDR_PANE_ID` | read if present, to say *where* an artifact is running |
 
 `TART_HOME` is the seam for an isolated config — a scratch workspace, a
@@ -131,9 +132,9 @@ and `tart list` names any manifest that fails to load.
 ```json
 {
   "title": "Bedrock spend",
-  "run": "uv run --with rich --with tartifacts python bin/dash.py",
+  "run": "$TART_PYTHON bin/dash.py",
   "data": "bin/data/bedrock_usage.json",
-  "fetch": "uv run --with tartifacts python bin/snapshot.py",
+  "fetch": "$TART_PYTHON bin/snapshot.py",
   "stale_after": "4h",
   "auto_refresh": true
 }
@@ -166,9 +167,17 @@ so *pointing* at a different file re-asks; the file's contents are data
 and deliberately outside the hash — as with direnv and what `.envrc`
 sources.
 
-**Depend on `tartifacts` from PyPI**: `uv run --with rich --with tartifacts
-python bin/dash.py`. Use `--with-editable /path/to/tart` only when
-developing tart itself (see Gotchas).
+**`$TART_PYTHON` is the default interpreter for `run` and `fetch`.** tart
+sets it to its own interpreter for every command it spawns, and that
+interpreter has `rich` and `tartifacts` by construction (they are tart's
+own dependencies). One process, ~20 MB, no resolver in the loop.
+
+The alternative, `uv run --with rich --with tartifacts python bin/dash.py`,
+is for artifacts that need **extra** libraries (`--with pandas ...`) — but
+know the cost: `uv run` stays resident as a supervisor for the life of the
+artifact (~24-34 MB doing nothing) on top of the Python it spawned, ~60 MB
+per artifact instead of ~20, plus resolver latency on every single fetch.
+Reach for it when you need the isolated env, not by default.
 
 Declaring `data`/`fetch`/`stale_after` is what makes an artifact
 self-contained rather than silently depending on someone's crontab.
@@ -434,8 +443,8 @@ Copy the two examples above — they are executed in CI, so they run as
 printed.
 
 1. `mkdir -p .tart` and write the manifest — it declares the data path.
-2. Fetch script: write to `tartifacts.data_path()`. Its `fetch` command
-   needs tart on the path (`uv run --with tartifacts ...`).
+2. Fetch script: write to `tartifacts.data_path()`. Run it with
+   `$TART_PYTHON`, which has tart importable already.
 3. Artifact script: a `render(state, console)` reading `state["data"]`.
 4. `tart fetch <name>` then `tart render <name>` — no pane needed.
 5. `tart trust <name>` — a manifest runs nothing until you do.
@@ -481,5 +490,5 @@ declares no `summary()`.
   bounds it for you, but declaring more fixed width than the terminal has
   will still squeeze things.
 - **A fetch script needs tart importable**, since it calls
-  `tartifacts.data_path()` — put `--with tartifacts` in the
-  manifest's `fetch` command, not just `run`.
+  `tartifacts.data_path()` — `$TART_PYTHON` has it; a bare `python3` or a
+  `uv run` without `--with tartifacts` does not.

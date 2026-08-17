@@ -650,3 +650,37 @@ def test_states_rejects_a_non_object_entry(workspace):
     result = tart("render", "demo", "--states", home=home, cwd=tmp_path)
     assert result.returncode == 1
     assert "must be JSON objects" in result.stderr
+
+
+# --- TART_PYTHON ------------------------------------------------------------
+
+
+def test_tart_python_manifest_runs_without_uv(workspace):
+    """The memory fix: `$TART_PYTHON show.py` uses tart's own interpreter
+    (which has rich+tartifacts by construction) — one process instead of a
+    resident uv supervisor plus a second Python. The shell expands the var
+    because tart exports it before exec."""
+    tmp_path, home, repo = workspace
+    spec = json.loads((repo / ".tart" / "demo.json").read_text())
+    spec["run"] = "$TART_PYTHON show.py"
+    spec["fetch"] = "$TART_PYTHON fetch.py"
+    (repo / ".tart" / "demo.json").write_text(json.dumps(spec))
+    tart("trust", "demo", home=home, cwd=tmp_path)
+
+    assert tart("fetch", "demo", home=home, cwd=tmp_path).returncode == 0
+    result = tart("render", "demo", "--json", home=home, cwd=tmp_path)
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == {"rows": 3}
+
+
+def test_tart_python_is_the_interpreter_running_tart(workspace):
+    tmp_path, home, repo = workspace
+    (repo / "fetch.py").write_text(textwrap.dedent("""
+        import json, os, sys, tartifacts
+        with open(tartifacts.data_path(), "w") as f:
+            json.dump({"tart_python": os.environ.get("TART_PYTHON"),
+                       "actual": sys.executable}, f)
+    """))
+    tart("fetch", "demo", home=home, cwd=tmp_path)
+    seen = json.loads((repo / "data" / "out.json").read_text())
+    assert seen["tart_python"] == sys.executable   # the CLI's own interpreter

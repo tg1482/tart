@@ -20,13 +20,19 @@ show.py        render(state, console) returns any rich renderable
 ```json
 {
   "title": "Cloud spend",
-  "run":   "uv run --with rich --with tartifacts python show.py",
+  "run":   "$TART_PYTHON show.py",
   "data":  "data/spend.json",
-  "fetch": "uv run --with tartifacts python fetch.py",
+  "fetch": "$TART_PYTHON fetch.py",
   "stale_after": "4h",
   "auto_refresh": true
 }
 ```
+
+`$TART_PYTHON` is tart's own interpreter — it already has `rich` and
+`tartifacts`, so most artifacts need no uv environment of their own: one
+~20 MB process instead of a resident `uv run` supervisor holding open a
+second Python. Need more libraries? Any command works there, `uv run
+--with pandas ...` included.
 
 ```python
 from tartifacts import app, widgets

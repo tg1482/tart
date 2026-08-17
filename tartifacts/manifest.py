@@ -9,9 +9,9 @@ run` refreshes stale data and `tart list` flags it.
 
     {
       "title": "Bedrock spend",
-      "run":   "uv run --with rich --with tartifacts python bin/dash.py",
+      "run":   "$TART_PYTHON bin/dash.py",   // tart's interpreter: has rich+tartifacts
       "data":  "bin/data/bedrock_usage.json",   // relative to the repo root
-      "fetch": "uv run python bin/snapshot.py", // produces `data`
+      "fetch": "$TART_PYTHON bin/snapshot.py", // produces `data`
       "stale_after": "4h",                      // when `data` stops being trustworthy
       "auto_refresh": true                      // re-run `fetch` while the artifact is open
     }
