@@ -27,7 +27,7 @@ import os
 import re
 import shlex
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -63,6 +63,11 @@ class Manifest:
     # at a different file re-asks, while the file's CONTENTS are data and
     # deliberately outside the hash — like direnv and what .envrc sources.
     env_file: str | None = None
+    # `--state` payloads worth checking: the views a keypress reaches.
+    # `tart render <name> --states` renders each one headless — a key
+    # nobody can press from a pipe is otherwise a view nobody can check,
+    # and the crash always lives in the one view the smoke test skipped.
+    states: list = field(default_factory=list)
     # Opt-in, because `fetch` can be expensive (a real API call). Off, a
     # artifact only shows staleness and tells you to refresh; on, it keeps
     # its own data fresh and needs no external cron at all.
@@ -183,6 +188,7 @@ FIELD_TYPES = {
     "env_file": str,
     "auto_refresh": bool,
     "stale_after": (str, int, float),
+    "states": list,
 }
 
 
@@ -230,5 +236,6 @@ def load(path: Path) -> Manifest | None:
         fetch=raw.get("fetch"),
         env_file=raw.get("env_file"),
         stale_after=parse_duration(raw.get("stale_after")),
+        states=raw.get("states") or [],
         auto_refresh=bool(raw.get("auto_refresh", False)),
     )

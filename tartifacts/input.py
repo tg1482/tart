@@ -77,7 +77,34 @@ class Reader:
         ready, _, _ = select.select([self._fd()], [], [], ESCAPE_TAIL_WAIT)
         if not ready:
             return Key(ESC)
-        return Key(first + self._read(2))
+        return Key(first + self._read_escape_tail())
+
+    def _read_escape_tail(self) -> str:
+        """The rest of an escape sequence, terminator included. A flat
+        `read(2)` handled arrows (`[A`) but split anything longer — Home is
+        `[1~`, F5 is `[15~` — stranding bytes that fired as spurious keys
+        (`~`) on the NEXT press: the exact bug class the module docstring
+        says was fixed for arrows, one layer up.
+
+        CSI (`[`...) runs to a final byte in `@`–`~`; SS3 (`O`X) is exactly
+        one more byte; anything else is Alt+key, one byte."""
+        lead = self._read(1)
+        if lead == "O":
+            return lead + self._read(1)
+        if lead != "[":
+            return lead
+        seq = lead
+        while len(seq) < 16:  # runaway guard: no real key sequence is longer
+            ready, _, _ = select.select([self._fd()], [], [], ESCAPE_TAIL_WAIT)
+            if not ready:
+                break
+            ch = self._read(1)
+            if not ch:
+                break
+            seq += ch
+            if "@" <= ch <= "~":
+                break
+        return seq
 
 
 def is_quit(key: Key) -> bool:

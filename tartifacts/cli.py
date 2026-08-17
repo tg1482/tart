@@ -3,6 +3,7 @@
     tart list                    what's declared and what's live
     tart run <name>              launch an artifact (fetches first if stale)
     tart render <name> [--json]  one frame, headless — for agents/logs
+    tart render <name> --states  smoke every declared state, not just the base frame
     tart fetch <name>            re-run an artifact's data-producing command
     tart logs <name>             the last fetch's outcome and output, however it was triggered
     tart cron <name>             a crontab line that keeps its data fresh, PATH included
@@ -15,6 +16,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import shlex
 import shutil
@@ -136,9 +138,51 @@ def _render(name: str, extra: list[str]) -> None:
     if not ptr.run:
         print(f'{ptr.path} has no "run" command', file=sys.stderr)
         sys.exit(1)
+    if "--states" in extra:
+        _render_states(ptr)
+        return
     mode = "--json" if "--json" in extra else "--once"
     passthrough = [a for a in extra if a != "--json"]
     _exec(ptr, ptr.run, [mode, *passthrough])
+
+
+def _render_states(ptr: Manifest) -> None:
+    """One frame per declared state, plus the base frame — the smoke matrix.
+
+    `render --once` proves the initial view; every other view sits behind a
+    keypress, and the crash always lives in the one view nobody rendered
+    (a KeyError in a `rows()` only called on 'd' survived every headless
+    check and hit the user live). Declaring the states next to `run` makes
+    "check them all" one command instead of a hand-maintained loop."""
+    _require_trust(ptr)
+    bad = [s for s in ptr.states if not isinstance(s, dict)]
+    if bad:
+        print(f'"states" entries must be JSON objects, got: {bad[0]!r}', file=sys.stderr)
+        sys.exit(1)
+    env = {**os.environ, **_env_overlay(ptr), "TART_MANIFEST": str(ptr.path.resolve())}
+    frames = [("(base)", None)] + [(json.dumps(s), s) for s in ptr.states]
+    failures = 0
+    for label, state in frames:
+        parts = [ptr.run, "--once"]
+        if state is not None:
+            parts += ["--state", shlex.quote(json.dumps(state))]
+        proc = subprocess.run(
+            " ".join(parts), shell=True, cwd=ptr.root, env=env,
+            capture_output=True, text=True, timeout=refresh.FETCH_TIMEOUT,
+        )
+        if proc.returncode == 0:
+            print(f"ok    {label}")
+        else:
+            failures += 1
+            print(f"FAIL  {label}  (exit {proc.returncode})")
+            for line in proc.stderr.strip().splitlines()[-6:]:
+                print(f"      {line}")
+    if failures:
+        print(f"\n{failures} of {len(frames)} states failed", file=sys.stderr)
+        sys.exit(1)
+    if not ptr.states:
+        print('\nonly the base frame — declare "states": [{...}] in the manifest')
+        print("to smoke the views your keys reach")
 
 
 def _require_trust(found: Manifest) -> None:

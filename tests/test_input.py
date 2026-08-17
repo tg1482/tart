@@ -117,3 +117,35 @@ def test_a_closed_descriptor_does_not_raise(pipe, reader):
     os.close(pipe.read_fd)
     with pytest.raises((OSError, ValueError)):
         reader.poll(0.01)      # select raises; the loop's teardown handles it
+
+
+@pytest.mark.parametrize("sequence", [
+    "\x1b[1~",     # Home
+    "\x1b[15~",    # F5
+    "\x1b[3~",     # Delete
+    "\x1b[1;5C",   # Ctrl-Right
+])
+def test_long_escape_sequences_arrive_whole_with_no_stranded_bytes(pipe, reader, sequence):
+    """A flat read(2) handled arrows but split anything longer, stranding
+    bytes (`~`) that fired as spurious keys on the NEXT press — the same
+    bug class the module fixed for arrows, one layer up."""
+    pipe.send(sequence)
+    assert reader.poll(1.0) == ck_input.Key(sequence)
+    pipe.send("x")                        # the next real keypress...
+    assert reader.poll(1.0) == ck_input.Key("x")   # ...is itself, not a leftover
+
+
+def test_ss3_function_keys_arrive_whole(pipe, reader):
+    pipe.send("\x1bOP")                   # F1 in application mode
+    assert reader.poll(1.0) == ck_input.Key("\x1bOP")
+
+
+def test_alt_key_is_escape_plus_one_char(pipe, reader):
+    pipe.send("\x1bx")
+    assert reader.poll(1.0) == ck_input.Key("\x1bx")
+
+
+def test_a_runaway_csi_sequence_cannot_hang_the_reader(pipe, reader):
+    pipe.send("\x1b[" + "1" * 40)         # no terminator, ever
+    key = reader.poll(1.0)
+    assert key is not None and len(key.value) <= 17

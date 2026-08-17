@@ -577,3 +577,13 @@ def test_keys_help_is_derived_from_the_bindings():
                           "d": ("details", lambda st: None)})
     assert bound.help == "t timescale · d details"
     assert widgets.help_line(bound.help).plain == "t timescale · d details · r refresh · q quit"
+
+
+def test_plain_flattens_newlines_and_tabs_into_single_spaces():
+    """A scraped title with an embedded newline forced a second physical
+    line inside a no_wrap cell, misaligning the whole row — every fetch
+    script was adding its own ' '.join(s.split())."""
+    from tartifacts import widgets
+    assert widgets.plain("two\nlines\there") == "two lines here"
+    assert widgets.plain("  padded   out  ") == "padded out"
+    assert widgets.plain("\x1b[31mred\x1b[0m branch\n") == "[31mred[0m branch"

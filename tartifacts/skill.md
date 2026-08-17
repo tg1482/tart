@@ -23,6 +23,7 @@ place a path is declared, so neither script repeats it.
 | `tart render <name>` | print ONE frame and exit — no terminal needed (`--width`/`--height` to size it) |
 | `tart render <name> --json` | print its `summary()` as JSON |
 | `tart render <name> --state '<json>'` | merge JSON into state first — how you review a keypress path headlessly |
+| `tart render <name> --states` | render the base frame plus every state declared in the manifest — the smoke matrix |
 | `tart fetch <name>` | re-run its data-producing command now |
 | `tart logs <name>` | the last fetch's outcome and output — including background and cron fetches |
 | `tart cron <name>` | print a crontab line that keeps its data fresh — current PATH and absolute binary baked in |
@@ -147,6 +148,7 @@ and `tart list` names any manifest that fails to load.
 | `env_file` | no | KEY=VALUE file loaded into `run`/`fetch`'s environment (`~` expands) — where secrets live |
 | `stale_after` | no | `30s` / `45m` / `4h` / `2d` — when `data` stops being trustworthy |
 | `auto_refresh` | no | re-run `fetch` while open, whenever data passes `stale_after` |
+| `states` | no | `--state` payloads worth checking, e.g. `[{"detail": true}, {"scale": "7d"}]` — `tart render <name> --states` renders each |
 
 Paths are relative to the **repo root** (one level above `.tart/`), and
 `run`/`fetch` execute from there, so they work from any cwd.
@@ -352,6 +354,10 @@ Reserved, do not rebind: `q` quit, `r` refresh, `j`/`k` and arrows, `g`/`G`,
 Any state a key toggles should be a plain value in `state`, because
 `--state '{"detail": true}'` is then how an agent renders that view
 headlessly — a key nobody can press from a pipe is a view nobody can check.
+Then declare those payloads in the manifest's `states` list: `tart render
+<name> --states` renders every one, so the view behind a keypress gets
+checked by the same command that checks the base frame. The crash always
+lives in the one view the smoke test skipped.
 
 ### Formatting — `tartifacts.fmt`
 
@@ -462,6 +468,11 @@ declares no `summary()`.
   an over-tall table silently disappears — budget with
   `remaining_height(console, *your_fixed_renderables)`, which measures them
   rather than trusting a count you'd have to keep in sync.
+- **Side-by-side panels: use `widgets.row`, not rich's `Columns`.**
+  `Columns` sizes to content and leaves a gap instead of stretching
+  panels; `row(...)` stretches each to an equal share (and wraps, then
+  stacks, on narrow terminals). This has been rediscovered and
+  hand-rolled per artifact — the widget already exists.
 - **Never interpolate a series into an f-string.** `f"[green]{spark}[/] {caption}"`
   is a fixed-width string: rich wraps or ellipsizes it at the right, hiding
   the newest buckets. Pass `widgets.trend(values, summary=caption)` and let

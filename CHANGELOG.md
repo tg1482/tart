@@ -57,6 +57,20 @@ interest in it, and liveness claims are checkable.
 - `tart run` no longer refetches on every launch when data is present
   but `stale_after` is undeclared — the CLI twin of the keeper bug
 
+**Checkable views and input fixes.**
+
+- `states` manifest key + `tart render <name> --states`: declare the
+  `--state` payloads your keys reach, render them all in one command —
+  the crash always lived in the one view the smoke test skipped
+- escape sequences are parsed to their terminator: Home/End/F-keys
+  (`[1~`, `[15~`) no longer strand bytes that fired as spurious keys on
+  the next press
+- table cells flatten embedded newlines/tabs (a scraped title with a
+  newline misaligned the whole row); `widgets.plain` documents the
+  contract
+- docs: use `widgets.row` for side-by-side panels, not rich's `Columns`
+  (rediscovered and hand-rolled per artifact)
+
 ## 0.1.0 — unreleased
 
 First public release of **live terminal artifacts** — dashboards that

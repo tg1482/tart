@@ -175,16 +175,21 @@ class Column:
 
 
 def plain(value: RenderableType) -> RenderableType:
-    """Strip terminal control characters out of a data-derived string.
+    """Make a data-derived string safe for a one-line table cell.
 
-    A fetch script scrapes a git branch, a CI status, a log line — all
-    routinely coloured — and those bytes went straight to the terminal, so
-    data could clear the screen or set the window title on every frame. A
-    `Text` is left alone: that is the artifact author's own styling.
+    Two hazards, both real: a fetch script scrapes a git branch, a CI
+    status, a log line — routinely coloured — and those bytes went
+    straight to the terminal, so data could clear the screen or set the
+    window title on every frame. And a scraped title with an embedded
+    newline forced a second physical line inside a `no_wrap` cell,
+    misaligning the whole row — every fetch script was adding its own
+    `" ".join(s.split())`. So: control characters stripped, whitespace
+    runs (newlines and tabs included) collapsed to single spaces. A `Text`
+    is left alone: that is the artifact author's own styling.
     """
     if not isinstance(value, str):
         return value
-    return CONTROL_CHARS.sub("", value)
+    return " ".join(CONTROL_CHARS.sub("", value).split())
 
 
 def scrolling_table(

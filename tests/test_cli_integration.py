@@ -591,3 +591,62 @@ def test_cron_without_a_fetch_refuses(workspace):
     result = tart("cron", "demo", home=home, cwd=tmp_path)
     assert result.returncode == 1
     assert 'no "fetch"' in result.stderr
+
+
+# --- render --states: the smoke matrix --------------------------------------
+
+
+def declare_states(repo, home, tmp_path, states):
+    spec = json.loads((repo / ".tart" / "demo.json").read_text())
+    spec["states"] = states
+    (repo / ".tart" / "demo.json").write_text(json.dumps(spec))
+    tart("trust", "demo", home=home, cwd=tmp_path)
+
+
+def test_states_renders_every_declared_view(workspace):
+    tmp_path, home, repo = workspace
+    tart("fetch", "demo", home=home, cwd=tmp_path)
+    (repo / "show.py").write_text(textwrap.dedent("""
+        from rich.text import Text
+        from tartifacts import app
+        def render(st, c):
+            if st.get("view") == "broken":
+                raise KeyError("clickers")     # the keypress-only crash
+            return Text("VIEW=" + str(st.get("view")))
+        app.run(render=render)
+    """))
+    declare_states(repo, home, tmp_path, [{"view": "summary"}, {"view": "broken"}])
+
+    result = tart("render", "demo", "--states", home=home, cwd=tmp_path)
+    assert result.returncode == 1
+    assert "ok    (base)" in result.stdout
+    assert 'ok    {"view": "summary"}' in result.stdout
+    assert 'FAIL  {"view": "broken"}' in result.stdout
+    assert "KeyError" in result.stdout             # the traceback tail, surfaced
+    assert "1 of 3 states failed" in result.stderr
+
+
+def test_states_all_green_exits_zero(workspace):
+    tmp_path, home, repo = workspace
+    tart("fetch", "demo", home=home, cwd=tmp_path)
+    declare_states(repo, home, tmp_path, [{"extra": True}])
+    result = tart("render", "demo", "--states", home=home, cwd=tmp_path)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "FAIL" not in result.stdout
+
+
+def test_states_with_none_declared_still_checks_the_base_frame(workspace):
+    tmp_path, home, repo = workspace
+    tart("fetch", "demo", home=home, cwd=tmp_path)
+    result = tart("render", "demo", "--states", home=home, cwd=tmp_path)
+    assert result.returncode == 0
+    assert "ok    (base)" in result.stdout
+    assert 'declare "states"' in result.stdout     # the nudge
+
+
+def test_states_rejects_a_non_object_entry(workspace):
+    tmp_path, home, repo = workspace
+    declare_states(repo, home, tmp_path, ["not-an-object"])
+    result = tart("render", "demo", "--states", home=home, cwd=tmp_path)
+    assert result.returncode == 1
+    assert "must be JSON objects" in result.stderr
