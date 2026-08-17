@@ -5,9 +5,14 @@ per-project split. The point is the SHAPE: a flat line with a spike at 3pm
 is a different problem from a steady grind.
 """
 
+import datetime
+
+from rich.panel import Panel
 from rich.text import Text
 
 from tartifacts import app, widgets
+
+BAR_WIDTH = 24
 
 
 def compact(n):
@@ -20,6 +25,58 @@ def compact(n):
 
 def data(state):
     return state.get("data") or {}
+
+
+def countdown(iso):
+    """'2h 14m' until an ISO reset stamp, or '' when there isn't one."""
+    if not iso:
+        return ""
+    try:
+        left = datetime.datetime.fromisoformat(iso) - datetime.datetime.now(datetime.timezone.utc)
+    except ValueError:
+        return ""
+    minutes = max(0, int(left.total_seconds() // 60))
+    if minutes >= 1440:
+        return f"{minutes // 1440}d {minutes % 1440 // 60}h"
+    return f"{minutes // 60}h {minutes % 60:02d}m" if minutes >= 60 else f"{minutes}m"
+
+
+def severity(percent):
+    return "green" if percent < 50 else "yellow" if percent < 80 else "red"
+
+
+def gauge(label, percent, note):
+    """A labelled bar. Percent is all the API gives — there are no dollars."""
+    filled = int(round(BAR_WIDTH * min(percent, 100) / 100))
+    style = severity(percent)
+    return Text.assemble(
+        (f"{label:<16}", "bold"),
+        ("█" * filled, style),
+        ("─" * (BAR_WIDTH - filled), "bright_black"),
+        (f" {percent:>3.0f}%", f"bold {style}"),
+        (f"  resets in {note}" if note else "", "dim"),
+    )
+
+
+def limits_panel(state):
+    """None when there is no Keychain to read, so the panel simply vanishes."""
+    usage = data(state).get("plan_usage")
+    if not usage or not usage.get("windows"):
+        return None
+    lines = [gauge(w["name"], w["percent"], countdown(w.get("resets_at")))
+             for w in usage["windows"]]
+    extra = usage.get("extra") or {}
+    if extra.get("enabled"):
+        lines.append(Text.assemble(
+            (f"{'extra credits':<16}", "bold"),
+            (f"{extra.get('used', 0):,.0f} of {extra.get('limit', 0):,}", "cyan"),
+        ))
+    elif extra.get("reason"):
+        lines.append(Text(f"{'extra credits':<16}off ({extra['reason']})", style="dim"))
+    worst = max((w["percent"] for w in usage["windows"]), default=0)
+    plan = usage.get("plan") or "plan"
+    return Panel(widgets.stack(*lines), title=f"Limits · {plan}",
+                 border_style=severity(worst))
 
 
 KEYS = widgets.Keys({
@@ -90,6 +147,7 @@ def render(state, console):
         ),
     )
     models = widgets.stack(*[model_line(m) for m in payload.get("models", [])])
+    limits = limits_panel(state)
     keys = widgets.help_line(widgets.Cursor.KEYS, KEYS.help)
     table = widgets.scrolling_table(
         projects(state),
@@ -100,12 +158,12 @@ def render(state, console):
             widgets.Column("est. cost", width=11, justify="right"),
         ],
         row,
-        height=widgets.remaining_height(console, head, kpis, trends, models, keys, 4),
+        height=widgets.remaining_height(console, head, limits, kpis, trends, models, keys, 4),
         console=console,
         title=f"By project — sorted by {state.get('by', 'tokens')}",
         empty="no Claude activity in the window",
     )
-    return widgets.stack(head, kpis, trends, models, table, keys)
+    return widgets.stack(head, limits, kpis, trends, models, table, keys)
 
 
 app.run(

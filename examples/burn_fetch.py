@@ -5,10 +5,13 @@ gigabytes; the last few MB of each is where today lives, and a fetch that
 takes a minute is a fetch nobody runs.
 """
 
+import datetime
 import glob
 import json
 import os
+import subprocess
 import time
+import urllib.request
 from collections import defaultdict
 
 import tartifacts
@@ -16,6 +19,11 @@ import tartifacts
 TAIL_BYTES = 3_000_000
 WINDOW_HOURS = 24
 TRANSCRIPTS = os.path.expanduser("~/.claude/projects/*/*.jsonl")
+
+# What the /usage tab renders. Undocumented and beta-gated, so every failure
+# here degrades to None rather than breaking the spend panel beside it.
+USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
+KEYCHAIN = ["security", "find-generic-password", "-s", "Claude Code-credentials", "-w"]
 
 # Approximate list prices, USD per million tokens. Edit to match your plan —
 # this is a local estimate, not a bill.
@@ -54,6 +62,53 @@ def cost(model: str, usage: dict) -> float:
     return (billed_in * rate_in + out * rate_out) / 1_000_000
 
 
+def plan_usage():
+    """Account-side utilization: percentages and reset times, never dollars.
+
+    Returns None anywhere without a Keychain (the dev box), which is the
+    signal for the panel to hide itself rather than render an empty gauge.
+    """
+    try:
+        creds = subprocess.run(KEYCHAIN, capture_output=True, text=True, timeout=10)
+        if creds.returncode != 0:
+            return None
+        oauth = json.loads(creds.stdout).get("claudeAiOauth") or {}
+        request = urllib.request.Request(USAGE_URL, headers={
+            "Authorization": f"Bearer {oauth.get('accessToken')}",
+            "anthropic-beta": "oauth-2025-04-20",
+        })
+        with urllib.request.urlopen(request, timeout=15) as response:
+            body = json.load(response)
+    except Exception:  # keychain, network, auth, schema — all mean "no data"
+        return None
+
+    windows = []
+    for key, name in (("five_hour", "5-hour session"), ("seven_day", "7-day all")):
+        window = body.get(key)
+        if window:
+            windows.append({"name": name, "percent": window.get("utilization") or 0.0,
+                            "resets_at": window.get("resets_at")})
+    # per-model weekly caps arrive only in `limits`, scoped and named there
+    for limit in body.get("limits") or []:
+        scope = (limit.get("scope") or {}).get("model") or {}
+        if limit.get("kind") == "weekly_scoped" and scope.get("display_name"):
+            windows.append({"name": f"7-day {scope['display_name']}",
+                            "percent": limit.get("percent") or 0.0,
+                            "resets_at": limit.get("resets_at")})
+
+    extra = body.get("extra_usage") or {}
+    return {
+        "plan": oauth.get("subscriptionType"),
+        "windows": windows,
+        "extra": {
+            "enabled": extra.get("is_enabled"),
+            "used": extra.get("used_credits"),
+            "limit": extra.get("monthly_limit"),
+            "reason": extra.get("disabled_reason"),
+        } if extra else None,
+    }
+
+
 def records():
     """(epoch, project, model, usage) for every assistant turn in the tail."""
     cutoff = time.time() - WINDOW_HOURS * 3600
@@ -79,7 +134,10 @@ def records():
                     stamp = entry.get("timestamp")
                     if not usage or not stamp:
                         continue
-                    epoch = time.mktime(time.strptime(stamp[:19], "%Y-%m-%dT%H:%M:%S"))
+                    # transcript stamps are UTC; mktime would read them as local
+                    # and push every turn past the last hour bucket
+                    epoch = datetime.datetime.fromisoformat(stamp[:19]).replace(
+                        tzinfo=datetime.timezone.utc).timestamp()
                     yield epoch, project, message.get("model") or "unknown", usage
         except OSError:
             continue
@@ -125,6 +183,7 @@ hours = [buckets.get(h, {"tokens": 0, "cost": 0.0}) for h in range(WINDOW_HOURS)
 tartifacts.write_data({
     "at": now,
     "window_hours": WINDOW_HOURS,
+    "plan_usage": plan_usage(),
     "totals": totals,
     "per_hour": {
         "tokens": [h["tokens"] for h in hours],
