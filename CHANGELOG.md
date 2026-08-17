@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.3 — unreleased
+## 0.3.0 — 2026-08-17
 
 **The flight recorder.** Failure used to be silent: the background keeper
 captured a fetch's output and discarded it, a broken data file was dropped

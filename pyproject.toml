@@ -1,6 +1,6 @@
 [project]
 name = "tartifacts"
-version = "0.2.0"
+version = "0.3.0"
 description = "Live terminal artifacts — dashboards that stay open, stay fresh, and stay findable"
 readme = "README.md"
 requires-python = ">=3.10"
