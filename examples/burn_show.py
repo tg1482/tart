@@ -80,6 +80,7 @@ def limits_panel(state):
 
 
 KEYS = widgets.Keys({
+    "d": ("detail", lambda st: st.update(detail=not st.get("detail", False))),
     "s": ("sort tokens/cost", lambda st: st.update(
         by="cost" if st.get("by", "tokens") == "tokens" else "tokens")),
 })
@@ -117,6 +118,16 @@ def render(state, console):
     totals = payload.get("totals", {})
     per_hour = payload.get("per_hour", {})
     tokens, spend = per_hour.get("tokens", []), per_hour.get("cost", [])
+    limits = limits_panel(state)
+
+    # Limits are the question you open this for; spend is the follow-up.
+    if not state.get("detail"):
+        return widgets.stack(
+            widgets.header(Text.assemble(("Claude limits", "bold"),
+                                         ("   ·   d for spend detail", "dim"))),
+            limits or widgets.header("no plan data — press d for local spend", warn=True),
+            widgets.help_line("d detail"),  # sorting needs the table, which is hidden
+        )
 
     head = widgets.header(
         Text.assemble(
@@ -147,7 +158,6 @@ def render(state, console):
         ),
     )
     models = widgets.stack(*[model_line(m) for m in payload.get("models", [])])
-    limits = limits_panel(state)
     keys = widgets.help_line(widgets.Cursor.KEYS, KEYS.help)
     table = widgets.scrolling_table(
         projects(state),
@@ -168,10 +178,11 @@ def render(state, console):
 
 app.run(
     render=render,
-    state={"cursor": widgets.Cursor(), "by": "tokens"},
+    state={"cursor": widgets.Cursor(), "by": "tokens", "detail": False},
     keys=KEYS,
     rows=projects,
     summary=lambda st: {
+        "limits": (data(st).get("plan_usage") or {}).get("windows"),
         "window_hours": data(st).get("window_hours"),
         "totals": data(st).get("totals"),
         "top_project": (projects(st) or [{}])[0].get("project"),
