@@ -1,5 +1,12 @@
 # Changelog
 
+## unreleased
+
+- headless renders warn on stderr when the data is past its declared
+  `stale_after` (exit still 0 — stale numbers are usable, but an agent
+  reading `--json` was getting 6-hour-old data against a 1h declaration
+  with nothing in the render path saying so)
+
 ## 0.3.0 — 2026-08-17
 
 **The flight recorder.** Failure used to be silent: the background keeper

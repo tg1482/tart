@@ -65,7 +65,10 @@ intact.
 `render` (both modes) is non-zero if the artifact fails to render OR a
 declared data file is missing/unparseable — the frame or summary still
 prints, stderr says which file and why, so partial numbers flow but the
-exit says unhealthy; `fetch` passes through the fetch command's status
+exit says unhealthy. **Stale data is a warning, not a failure**: render
+exits 0 but stderr says how old the data is against its declared
+`stale_after` — an agent reading `--json` must check stderr or it will
+read hours-old numbers without knowing; `fetch` passes through the fetch command's status
 (124 timeout, 128+N if signal-killed, 1 if it wrote nowhere); `list` is 1
 if any manifest is unreadable; an unknown or ambiguous name is 1.
 

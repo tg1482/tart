@@ -298,6 +298,23 @@ def _diagnose_sources(sources: dict, state: dict, pinned: set) -> bool:
     return broken
 
 
+def _warn_if_stale(state: dict) -> None:
+    """Stale is a warning, not a failure: the data is usable, so the exit
+    code stays 0 — but silence here let an agent read 6-hour-old numbers
+    all session against a manifest declaring `stale_after: 1h`, with
+    nothing anywhere in the render path saying so. `tart list` flagged it;
+    the surface an agent actually reads did not."""
+    declared = state.get("manifest")
+    if declared is None or declared.is_stale() is not True:
+        return
+    print(
+        f"warning: data is {fmt.age(declared.data_age() or 0)} old; "
+        f"the manifest declares stale_after "
+        f"{fmt.age(declared.stale_after or 0)} — tart fetch {declared.path.stem}",
+        file=sys.stderr,
+    )
+
+
 def _headless_json(sources: dict, state: dict, render, summary, pinned=frozenset()) -> None:
     _load_all(sources, state, pinned)
 
@@ -325,6 +342,7 @@ def _headless_json(sources: dict, state: dict, render, summary, pinned=frozenset
         sys.exit(1)
     # After the payload: partial numbers still flow to whoever pipes them,
     # but the exit code says the artifact is not actually healthy.
+    _warn_if_stale(state)
     if _diagnose_sources(sources, state, pinned):
         sys.exit(1)
 
@@ -351,6 +369,7 @@ def _headless_once(sources: dict, state: dict, render, args: list[str], pinned=f
         # frame as it really renders, colours and all, for a README.
         Path(svg).parent.mkdir(parents=True, exist_ok=True)
         Path(svg).write_text(console.export_svg(title=state.get("_svg_title", "tart")))
+    _warn_if_stale(state)
     if _diagnose_sources(sources, state, pinned):
         sys.exit(1)
 

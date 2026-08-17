@@ -203,3 +203,45 @@ def test_state_wins_over_the_source_that_would_overwrite_it(artifact, capsys):
 def test_a_source_not_pinned_by_state_still_loads(artifact, capsys):
     app.run(render=render, argv=["--once", "--state", '{"unrelated": 1}'])
     assert "3 rows" in capsys.readouterr().out          # real data, untouched
+
+
+def test_stale_data_renders_with_a_warning_but_exit_zero(tmp_path, monkeypatch, capsys):
+    """Stale is a warning, not a failure: the numbers are usable, so exit
+    stays 0 — but an agent reading `render --json` must be TOLD the data
+    is past its declared freshness, or it reads 6-hour-old numbers all
+    session (this happened)."""
+    import os, time
+    repo = tmp_path / "repo"
+    (repo / ".tart").mkdir(parents=True)
+    (repo / "data").mkdir()
+    data = repo / "data" / "d.json"
+    data.write_text('{"n": 1}')
+    old = time.time() - 7200
+    os.utime(data, (old, old))
+    manifest = repo / ".tart" / "thing.json"
+    manifest.write_text(json.dumps(
+        {"title": "T", "run": "true", "data": "data/d.json", "stale_after": "1h"}))
+    monkeypatch.setenv("TART_MANIFEST", str(manifest))
+    monkeypatch.chdir(tmp_path)
+
+    app.run(render=lambda st, c: Text("fine"), argv=["--json"])
+    captured = capsys.readouterr()
+    assert "warning: data is 2h old" in captured.err
+    assert "stale_after 1h" in captured.err
+    assert "tart fetch thing" in captured.err
+    assert json.loads(captured.out) == {"data": {"n": 1}}   # numbers still flow
+
+
+def test_fresh_data_renders_with_no_warning(tmp_path, monkeypatch, capsys):
+    repo = tmp_path / "repo"
+    (repo / ".tart").mkdir(parents=True)
+    (repo / "data").mkdir()
+    (repo / "data" / "d.json").write_text('{"n": 1}')
+    manifest = repo / ".tart" / "thing.json"
+    manifest.write_text(json.dumps(
+        {"title": "T", "run": "true", "data": "data/d.json", "stale_after": "1h"}))
+    monkeypatch.setenv("TART_MANIFEST", str(manifest))
+    monkeypatch.chdir(tmp_path)
+
+    app.run(render=lambda st, c: Text("fine"), argv=["--json"])
+    assert "warning" not in capsys.readouterr().err
