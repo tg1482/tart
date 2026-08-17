@@ -11,6 +11,16 @@ pre-upgrade code, and each failure looked minutes old.
   freshness as a machine-level standing order, not a side effect of a
   pane being open. Minutes staggered by name; unmanaged lines untouched;
   sub-10m cadences stay keeper-only
+- `tart cron <name>` REGISTERS (installs into the managed block, survives
+  every later --sync, idempotent); `--show` gives the old print-only
+  preview. An API whose purpose is freshness must produce freshness, not
+  advice — the printed line predictably never reached a crontab
+- `TART_CRONTAB`: a file standing in for the real crontab, so cron
+  registration is testable end-to-end; the test harness always sets it
+- a freshness-contract test suite pinning the system-level promise
+  (staleness is never silent on any read surface, registration is real,
+  user crontab lines survive) — the class of test whose absence let every
+  mechanism test pass while a live artifact served 6-hour-old data
 - `tart restart <name> | --all`: artifacts install a SIGUSR1 handler that
   re-execs them in place (same pane, new code); run after upgrading tart.
   Pre-handler processes are named, not signalled

@@ -26,8 +26,8 @@ place a path is declared, so neither script repeats it.
 | `tart render <name> --states` | render the base frame plus every state declared in the manifest — the smoke matrix |
 | `tart fetch <name>` | re-run its data-producing command now |
 | `tart logs <name>` | the last fetch's outcome and output — including background and cron fetches |
-| `tart cron <name>` | print a crontab line that keeps its data fresh — current PATH and absolute binary baked in |
-| `tart cron --sync` | install/refresh a managed crontab block: one line per trusted `auto_refresh` artifact (stale_after ≥ 10m), staggered minutes, unmanaged lines untouched |
+| `tart cron <name>` | register a standing fetch in the managed crontab block, current PATH and absolute binary baked in (`--show` to preview without installing) |
+| `tart cron --sync` | refresh the managed block: every trusted `auto_refresh` artifact (stale_after ≥ 10m) plus every name ever `tart cron <name>`-registered; staggered minutes, unmanaged lines untouched |
 | `tart restart <name> \| --all` | re-exec live artifacts in place (SIGUSR1) — same pane, new code; run it after upgrading tart |
 | `tart register <path>` | adopt a manifest living anywhere — records its location and trusts it |
 | `tart trust <name>` | agree to run this manifest's commands (`--all`, `--list`, `--forget <name>`) |
@@ -127,6 +127,7 @@ migration for a machine that predates this.
 | `TART_HOME` | where tart keeps roots, index and live entries (default `~/.tart`) |
 | `TART_MANIFEST` | set by tart for the artifact and fetch scripts it launches — read it via `tartifacts.data_path()`, don't set it by hand |
 | `TART_PYTHON` | set by tart for every command it spawns: its own interpreter, which has `rich`+`tartifacts` — use it as the manifest's interpreter unless you need extra deps |
+| `TART_CRONTAB` | a file standing in for the real crontab — `tart cron` reads/writes it instead of running `crontab`. The seam tests use so cron registration is testable without touching a real machine |
 | `TMUX_PANE` / `HERDR_PANE_ID` | read if present, to say *where* an artifact is running |
 
 `TART_HOME` is the seam for an isolated config — a scratch workspace, a

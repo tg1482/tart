@@ -58,8 +58,11 @@ def workspace(tmp_path):
 def tart(*args, home, cwd):
     """Invoke the CLI the way a shell would, pointed at an isolated state
     directory. TART_HOME rather than HOME: it's the seam tart actually
-    reads, and it can't be shadowed by whatever the parent process has."""
-    env = {**os.environ, "TART_HOME": str(home / ".tart"), "PYTHONPATH": REPO}
+    reads, and it can't be shadowed by whatever the parent process has.
+    TART_CRONTAB is ALWAYS set: `tart cron` performs real registration,
+    and no test may ever reach the developer's actual crontab."""
+    env = {**os.environ, "TART_HOME": str(home / ".tart"), "PYTHONPATH": REPO,
+           "TART_CRONTAB": str(home / "crontab.txt")}
     env.pop("TART_MANIFEST", None)
     return subprocess.run(
         [sys.executable, "-m", "tartifacts.cli", *args],
@@ -574,15 +577,15 @@ def test_logs_shows_the_path_a_failed_fetch_ran_under(workspace):
 # --- tart cron --------------------------------------------------------------
 
 
-def test_cron_bakes_in_path_and_a_stale_after_matched_cadence(workspace):
+def test_cron_show_bakes_in_path_and_a_stale_after_matched_cadence(workspace):
     tmp_path, home, repo = workspace       # stale_after: 1h
-    result = tart("cron", "demo", home=home, cwd=tmp_path)
+    result = tart("cron", "demo", "--show", home=home, cwd=tmp_path)
     assert result.returncode == 0
     line = result.stdout.strip()
     # minute is staggered by name hash so hourly artifacts don't pile on :00
     assert re.match(r"^\d{1,2} \*/1 \* \* \* PATH=", line)
     assert line.endswith("fetch demo")
-    assert "crontab -e" in result.stderr
+    assert not (home / "crontab.txt").exists()     # --show installs nothing
 
 
 def test_cron_without_a_fetch_refuses(workspace):
@@ -686,3 +689,86 @@ def test_tart_python_is_the_interpreter_running_tart(workspace):
     tart("fetch", "demo", home=home, cwd=tmp_path)
     seen = json.loads((repo / "data" / "out.json").read_text())
     assert seen["tart_python"] == sys.executable   # the CLI's own interpreter
+
+
+# --- the freshness contract -------------------------------------------------
+# These pin the system-level promise, not a mechanism: for an artifact
+# declaring stale_after, staleness must never be silent, and a standing
+# refresh order must be real (installed), not advisory (printed). They
+# exist because 740 mechanism tests passed while a live artifact served
+# six-hour-old data for days.
+
+
+def test_contract_cron_name_actually_registers(workspace):
+    """`tart cron <name>` must leave the machine refreshing the artifact —
+    the print-only version's line predictably never reached a crontab."""
+    tmp_path, home, repo = workspace
+    result = tart("cron", "demo", home=home, cwd=tmp_path)
+    assert result.returncode == 0
+    installed = (home / "crontab.txt").read_text()
+    assert re.search(r"\d{1,2} \*/1 \* \* \* PATH=.* fetch demo$", installed, re.M)
+    assert installed.count("fetch demo") == 1
+
+
+def test_contract_registration_survives_sync_and_never_duplicates(workspace):
+    """A hand-registered artifact stays registered through every later
+    --sync (even without auto_refresh), and re-registering is idempotent."""
+    tmp_path, home, repo = workspace
+    tart("cron", "demo", home=home, cwd=tmp_path)
+    tart("cron", "demo", home=home, cwd=tmp_path)      # idempotent
+    tart("cron", "--sync", home=home, cwd=tmp_path)    # demo has no auto_refresh
+    installed = (home / "crontab.txt").read_text()
+    assert installed.count("fetch demo") == 1
+
+
+def test_contract_sync_registers_auto_refresh_artifacts(workspace):
+    """auto_refresh means "keep this fresh" — with no pane open, that
+    promise is only real if --sync turns it into a standing order."""
+    tmp_path, home, repo = workspace
+    spec = json.loads((repo / ".tart" / "demo.json").read_text())
+    spec["auto_refresh"] = True                        # stale_after: 1h
+    (repo / ".tart" / "demo.json").write_text(json.dumps(spec))
+    tart("trust", "demo", home=home, cwd=tmp_path)
+
+    tart("cron", "--sync", home=home, cwd=tmp_path)
+    assert "fetch demo" in (home / "crontab.txt").read_text()
+
+
+def test_contract_sync_preserves_the_users_own_crontab_lines(workspace):
+    tmp_path, home, repo = workspace
+    (home / "crontab.txt").write_text("0 3 * * * backup.sh\n")
+    tart("cron", "demo", home=home, cwd=tmp_path)
+    installed = (home / "crontab.txt").read_text()
+    assert "0 3 * * * backup.sh" in installed
+    assert "fetch demo" in installed
+
+
+def test_contract_stale_data_is_never_silent_on_any_read_surface(workspace):
+    """The incident: an agent read `render --json` all session while the
+    data aged to 6x its declared limit, and nothing said so. Both read
+    surfaces must speak."""
+    tmp_path, home, repo = workspace
+    tart("fetch", "demo", home=home, cwd=tmp_path)
+    data = repo / "data" / "out.json"
+    old = 7200
+    import time as _t
+    os.utime(data, (_t.time() - old, _t.time() - old))  # 2h old vs 1h declared
+
+    rendered = tart("render", "demo", "--json", home=home, cwd=tmp_path)
+    assert "warning: data is 2h old" in rendered.stderr
+
+    listing = tart("list", home=home, cwd=tmp_path)
+    assert "⚠ data stale" in listing.stdout
+
+
+def test_contract_persistent_failure_reads_as_a_duration(workspace):
+    """"exit 7, 2m ago" hides a four-day outage; once a success exists,
+    failure must be dated from it."""
+    tmp_path, home, repo = workspace
+    tart("fetch", "demo", home=home, cwd=tmp_path)     # a success to date from
+    break_fetch(repo, home, tmp_path)
+    tart("fetch", "demo", home=home, cwd=tmp_path)
+    tart("fetch", "demo", home=home, cwd=tmp_path)
+
+    assert "✗ fetch failing for" in tart("list", home=home, cwd=tmp_path).stdout
+    assert "failing for" in tart("logs", "demo", home=home, cwd=tmp_path).stdout

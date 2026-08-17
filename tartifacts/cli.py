@@ -483,8 +483,13 @@ CRON_MIN_STALE = 600.0
 
 
 def _cron(args: list[str]) -> None:
-    """Print a crontab line that will actually work, PATH included — or,
-    with --sync, install one per auto-refresh artifact as a managed block.
+    """Register a standing fetch in the crontab's managed block. `--show`
+    prints the line without installing; `--sync` refreshes the whole block.
+
+    Registration is the default because this command's purpose is that the
+    data stays fresh — the print-only version shipped first, and its line
+    predictably never made it into anyone's crontab: an API that advises
+    instead of acting leaves the loop open.
 
     Cron's environment is almost empty — no /opt/homebrew/bin, no ~/.local
     — so the line that works pasted into a shell fails under cron with
@@ -502,12 +507,15 @@ def _cron(args: list[str]) -> None:
         sys.exit(1)
     if ptr.stale_after is None:
         print("# no stale_after declared — hourly is a guess; adjust freely", file=sys.stderr)
-    print(_cron_line(name, ptr))
-    print(
-        f"\nadd it with: crontab -e   (or `tart cron --sync` to manage it for you)"
-        f"\ncheck on it with: tart logs {name}   (every fetch records its outcome)",
-        file=sys.stderr,
-    )
+    if "--show" in args:
+        print(_cron_line(name, ptr))
+        print(
+            f"\ninstall it with: tart cron {name}"
+            f"\ncheck on it with: tart logs {name}   (every fetch records its outcome)",
+            file=sys.stderr,
+        )
+        return
+    _cron_sync(extra={name})
 
 
 def _cron_line(name: str, ptr: Manifest) -> str:
@@ -533,24 +541,36 @@ def _cron_schedule(stale_after: float | None, name: str = "") -> str:
     return f"{offset} 9 * * *"
 
 
-def _cron_sync() -> None:
-    """One managed crontab block covering every artifact that declared it
-    wants to stay fresh — the "for good" half of auto_refresh. The keeper
-    only exists while a pane is open, so freshness used to be a side
-    effect of somebody's terminal layout; this makes it a machine-level
-    standing order, using the daemon the OS already runs."""
-    lines, skipped = [], []
+def _cron_sync(extra: set[str] = frozenset()) -> None:
+    """One managed crontab block covering every artifact registered to
+    stay fresh — the "for good" half of auto_refresh. The keeper only
+    exists while a pane is open, so freshness used to be a side effect of
+    somebody's terminal layout; this makes it a machine-level standing
+    order, using the daemon the OS already runs.
+
+    Membership is a union: manifests declaring `auto_refresh`, names
+    already in the block (a `tart cron <name>` registration survives every
+    later --sync), and `extra` (the name being registered right now).
+    Explicitly registered names skip the sub-10m floor — typing the
+    command is the opt-in the floor exists to demand."""
     existing = _read_crontab()
     unmanaged = _strip_managed(existing)
+    explicit = _managed_names(existing) | set(extra)
+    lines, skipped = [], []
     for found in discover.declared():
         name = found.path.stem
-        if not (found.fetch and found.auto_refresh):
+        if not (name in explicit or (found.fetch and found.auto_refresh)):
+            continue
+        if not found.fetch:
+            skipped.append((name, 'no "fetch" command'))
             continue
         if not trust.is_trusted(found.path):
-            skipped.append((name, "not trusted"))
+            skipped.append((name, "not trusted — tart trust it first"))
             continue
-        if found.stale_after is not None and found.stale_after < CRON_MIN_STALE:
-            skipped.append((name, f"stale_after under {fmt.age(CRON_MIN_STALE)} — keeper territory"))
+        if (name not in explicit
+                and found.stale_after is not None and found.stale_after < CRON_MIN_STALE):
+            skipped.append((name, f"stale_after under {fmt.age(CRON_MIN_STALE)} — "
+                                  f"keeper territory (tart cron {name} to force)"))
             continue
         if f"tart fetch {name}" in unmanaged:
             skipped.append((name, "an unmanaged crontab line already fetches it — left alone"))
@@ -560,7 +580,7 @@ def _cron_sync() -> None:
     if updated != existing:
         _write_crontab(updated)
     for line in lines:
-        print(f"installed: {line.split(' PATH=')[0]} … tart fetch {line.rsplit(' ', 1)[-1]}")
+        print(f"installed: {line.split(' PATH=')[0]} … tart fetch {shlex.split(line)[-1]}")
     for name, why in skipped:
         print(f"skipped:   {name} — {why}")
     if not lines and not skipped:
@@ -568,6 +588,12 @@ def _cron_sync() -> None:
 
 
 def _read_crontab() -> str:
+    override = os.environ.get("TART_CRONTAB")  # a file standing in for the
+    if override:                               # real crontab — the seam that
+        try:                                   # lets tests exercise real
+            return Path(override).read_text()  # registration without touching
+        except OSError:                        # the developer's machine
+            return ""
     try:
         proc = subprocess.run(["crontab", "-l"], capture_output=True, text=True)
     except OSError:
@@ -576,10 +602,32 @@ def _read_crontab() -> str:
 
 
 def _write_crontab(text: str) -> None:
+    override = os.environ.get("TART_CRONTAB")
+    if override:
+        Path(override).write_text(text)
+        return
     proc = subprocess.run(["crontab", "-"], input=text, text=True, capture_output=True)
     if proc.returncode != 0:
         print(f"crontab refused the update: {proc.stderr.strip()}", file=sys.stderr)
         sys.exit(1)
+
+
+def _managed_names(text: str) -> set[str]:
+    """Artifact names already registered in the managed block — the last
+    token of each `... tart fetch <name>` line."""
+    names = set()
+    inside = False
+    for line in text.splitlines():
+        if line.strip() == CRON_BEGIN:
+            inside = True
+        elif line.strip() == CRON_END:
+            inside = False
+        elif inside and line.strip():
+            try:
+                names.add(shlex.split(line)[-1])
+            except ValueError:
+                continue
+    return names
 
 
 def _strip_managed(text: str) -> str:
