@@ -1,6 +1,6 @@
 # Changelog
 
-## unreleased
+## 0.4.0 — 2026-08-17
 
 **Auto-refresh, for good.** A live artifact ran a silently-failing keeper
 for four days: the keeper only exists while a pane is open, the pane ran
