@@ -13,9 +13,9 @@ without any fetch — the directory IS the data file.
 
 from __future__ import annotations
 
-import json
 import os
 import re
+import shlex
 import subprocess
 import time
 from pathlib import Path
@@ -82,13 +82,12 @@ def target_dir(state) -> str:
     return cwd
 
 
-def spawn_claude(state) -> None:
-    """Split the current herdr pane and start Claude in the target dir.
+def spawn_split(state, command: str, cwd: str, label: str) -> None:
+    """Split the current herdr pane and run `command` in it, focused.
 
     Every outcome lands in the footer — the devbox tart once piped its
     action to DEVNULL and reported success unconditionally, which is how
     an action gets built so it can only ever look like it worked."""
-    where = target_dir(state)
     pane = os.environ.get("HERDR_PANE_ID")
     if not pane:
         state["flash"] = "not inside herdr — no pane to split"
@@ -96,7 +95,7 @@ def spawn_claude(state) -> None:
     try:
         split = subprocess.run(
             ["herdr", "pane", "split", pane, "--direction", "right",
-             "--cwd", where, "--focus"],
+             "--cwd", cwd, "--focus"],
             capture_output=True, text=True, timeout=10,
         )
         match = re.search(r'"pane_id":"([^"]+)"', split.stdout)
@@ -105,15 +104,34 @@ def spawn_claude(state) -> None:
             return
         new_pane = match.group(1)
         ran = subprocess.run(
-            ["herdr", "pane", "run", new_pane, "claude"],
+            ["herdr", "pane", "run", new_pane, command],
             capture_output=True, text=True, timeout=10,
         )
         if ran.returncode != 0:
-            state["flash"] = f"claude launch failed: {ran.stderr.strip()[:80]}"
+            state["flash"] = f"{label} launch failed: {ran.stderr.strip()[:80]}"
             return
-        state["flash"] = f"claude → {new_pane} in {where}"
+        state["flash"] = f"{label} → {new_pane}"
     except (OSError, subprocess.TimeoutExpired) as bad:
         state["flash"] = f"herdr unreachable: {bad}"
+
+
+def spawn_claude(state) -> None:
+    where = target_dir(state)
+    spawn_split(state, "claude", where, f"claude in {where}")
+
+
+def spawn_editor(state) -> None:
+    """Open the selection — file OR directory — in the editor. nvim, vim,
+    emacs and `code` all accept a directory (netrw/oil, dired, workspace);
+    nano and micro don't, so the target is passed as-is and the editor
+    gets to have its own opinion in its own pane."""
+    editor = os.environ.get("VISUAL") or os.environ.get("EDITOR") or "nvim"
+    chosen = state["cursor"].selected(listing(state))
+    cwd = state.get("cwd") or START
+    target = os.path.join(cwd, chosen["name"]) if chosen else cwd
+    workdir = target if chosen and chosen["dir"] else cwd
+    spawn_split(state, f"{editor} {shlex.quote(target)}", workdir,
+                f"{os.path.basename(editor.split()[0])} {os.path.basename(target)}")
 
 
 def descend(state) -> None:
@@ -135,6 +153,10 @@ KEYS = widgets.Keys({
         sort=SORTS[(SORTS.index(st.get("sort", "name")) + 1) % len(SORTS)])),
     ".": ("hidden", lambda st: st.update(show_hidden=not st.get("show_hidden"))),
     "c": ("claude here", spawn_claude),
+    # `v` rather than the file-manager-conventional `e`: tart's own key
+    # conventions reserve e for "errors only", and v reads as vim — which
+    # is what VISUAL/EDITOR-unset machines get.
+    "v": ("vim", spawn_editor),
 })
 
 COLUMNS = [
