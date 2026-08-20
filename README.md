@@ -78,6 +78,8 @@ tart --skill                 # full reference, written for agents
 
 ## Examples
 
-Eight working artifacts in [`examples/`](examples/): local Claude Code
-agents, ad spend, newsletters, open issues, battery, Wi-Fi, cron, disk.
-Copy one, change the fetch.
+Nine working artifacts in [`examples/`](examples/): local Claude Code
+agents, ad spend, newsletters, open issues, battery, Wi-Fi, cron, disk,
+and a directory explorer whose `c` key opens a fresh Claude Code instance
+in a new herdr split at the selected directory. Copy one, change the
+fetch.

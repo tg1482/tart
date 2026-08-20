@@ -1,0 +1,10 @@
+{
+  "title": "Explorer",
+  "run": "$TART_PYTHON examples/explore_show.py",
+  "states": [
+    {"sort": "size"},
+    {"sort": "modified"},
+    {"show_hidden": true},
+    {"cwd": "/tmp"}
+  ]
+}
